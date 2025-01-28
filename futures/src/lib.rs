@@ -4,26 +4,22 @@
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/iced-rs/iced/9ab6923e943f784985e9ef9ca28b10278297225d/docs/logo.svg"
 )]
-#![deny(missing_docs)]
-#![deny(missing_debug_implementations)]
-#![deny(unused_results)]
-#![forbid(unsafe_code)]
-#![forbid(rust_2018_idioms)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
-
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 pub use futures;
+pub use iced_core as core;
 
-mod command;
-mod maybe_send;
+mod maybe;
 mod runtime;
 
 pub mod backend;
+pub mod event;
 pub mod executor;
+pub mod keyboard;
+pub mod stream;
 pub mod subscription;
 
-pub use command::Command;
 pub use executor::Executor;
-pub use maybe_send::MaybeSend;
+pub use maybe::{MaybeSend, MaybeSync};
 pub use platform::*;
 pub use runtime::Runtime;
 pub use subscription::Subscription;

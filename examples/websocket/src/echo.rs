@@ -1,24 +1,24 @@
 pub mod server;
 
-use iced_futures::futures;
-use iced_native::subscription::{self, Subscription};
+use iced::futures;
+use iced::stream;
+use iced::widget::text;
 
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
-use futures::stream::StreamExt;
+use futures::stream::{Stream, StreamExt};
 
 use async_tungstenite::tungstenite;
+use std::fmt;
 
-pub fn connect() -> Subscription<Event> {
-    struct Connect;
+pub fn connect() -> impl Stream<Item = Event> {
+    stream::channel(100, |mut output| async move {
+        let mut state = State::Disconnected;
 
-    subscription::unfold(
-        std::any::TypeId::of::<Connect>(),
-        State::Disconnected,
-        |state| async move {
-            match state {
+        loop {
+            match &mut state {
                 State::Disconnected => {
-                    const ECHO_SERVER: &str = "ws://localhost:3030";
+                    const ECHO_SERVER: &str = "ws://127.0.0.1:3030";
 
                     match async_tungstenite::tokio::connect_async(ECHO_SERVER)
                         .await
@@ -26,59 +26,58 @@ pub fn connect() -> Subscription<Event> {
                         Ok((websocket, _)) => {
                             let (sender, receiver) = mpsc::channel(100);
 
-                            (
-                                Some(Event::Connected(Connection(sender))),
-                                State::Connected(websocket, receiver),
-                            )
+                            let _ = output
+                                .send(Event::Connected(Connection(sender)))
+                                .await;
+
+                            state = State::Connected(websocket, receiver);
                         }
                         Err(_) => {
-                            let _ = tokio::time::sleep(
+                            tokio::time::sleep(
                                 tokio::time::Duration::from_secs(1),
                             )
                             .await;
 
-                            (Some(Event::Disconnected), State::Disconnected)
+                            let _ = output.send(Event::Disconnected).await;
                         }
                     }
                 }
-                State::Connected(mut websocket, mut input) => {
+                State::Connected(websocket, input) => {
                     let mut fused_websocket = websocket.by_ref().fuse();
 
                     futures::select! {
                         received = fused_websocket.select_next_some() => {
                             match received {
                                 Ok(tungstenite::Message::Text(message)) => {
-                                    (
-                                        Some(Event::MessageReceived(Message::User(message))),
-                                        State::Connected(websocket, input)
-                                    )
-                                }
-                                Ok(_) => {
-                                    (None, State::Connected(websocket, input))
+                                   let _ = output.send(Event::MessageReceived(Message::User(message))).await;
                                 }
                                 Err(_) => {
-                                    (Some(Event::Disconnected), State::Disconnected)
+                                    let _ = output.send(Event::Disconnected).await;
+
+                                    state = State::Disconnected;
                                 }
+                                Ok(_) => continue,
                             }
                         }
 
                         message = input.select_next_some() => {
-                            let result = websocket.send(tungstenite::Message::Text(String::from(message))).await;
+                            let result = websocket.send(tungstenite::Message::Text(message.to_string())).await;
 
-                            if result.is_ok() {
-                                (None, State::Connected(websocket, input))
-                            } else {
-                                (Some(Event::Disconnected), State::Disconnected)
+                            if result.is_err() {
+                                let _ = output.send(Event::Disconnected).await;
+
+                                state = State::Disconnected;
                             }
                         }
                     }
                 }
             }
-        },
-    )
+        }
+    })
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum State {
     Disconnected,
     Connected(
@@ -101,8 +100,7 @@ pub struct Connection(mpsc::Sender<Message>);
 
 impl Connection {
     pub fn send(&mut self, message: Message) {
-        let _ = self
-            .0
+        self.0
             .try_send(message)
             .expect("Send message to echo server");
     }
@@ -131,16 +129,24 @@ impl Message {
     pub fn disconnected() -> Self {
         Message::Disconnected
     }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Message::Connected => "Connected successfully!",
+            Message::Disconnected => "Connection lost... Retrying...",
+            Message::User(message) => message.as_str(),
+        }
+    }
 }
 
-impl From<Message> for String {
-    fn from(message: Message) -> Self {
-        match message {
-            Message::Connected => String::from("Connected successfully!"),
-            Message::Disconnected => {
-                String::from("Connection lost... Retrying...")
-            }
-            Message::User(message) => message,
-        }
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl<'a> text::IntoFragment<'a> for &'a Message {
+    fn into_fragment(self) -> text::Fragment<'a> {
+        text::Fragment::Borrowed(self.as_str())
     }
 }

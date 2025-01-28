@@ -1,34 +1,27 @@
 //! Configure a renderer.
-pub use crate::Antialiasing;
+use crate::core::{Font, Pixels};
+use crate::graphics::{self, Antialiasing};
 
-/// The settings of a [`Backend`].
+/// The settings of a [`Renderer`].
 ///
-/// [`Backend`]: crate::Backend
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// [`Renderer`]: crate::Renderer
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Settings {
-    /// The present mode of the [`Backend`].
+    /// The present mode of the [`Renderer`].
     ///
-    /// [`Backend`]: crate::Backend
+    /// [`Renderer`]: crate::Renderer
     pub present_mode: wgpu::PresentMode,
 
-    /// The internal graphics backend to use.
-    pub internal_backend: wgpu::Backends,
+    /// The graphics backends to use.
+    pub backends: wgpu::Backends,
 
-    /// The bytes of the font that will be used by default.
-    ///
-    /// If `None` is provided, a default system font will be chosen.
-    pub default_font: Option<&'static [u8]>,
+    /// The default [`Font`] to use.
+    pub default_font: Font,
 
     /// The default size of text.
     ///
-    /// By default, it will be set to 20.
-    pub default_text_size: u16,
-
-    /// If enabled, spread text workload in multiple threads when multiple cores
-    /// are available.
-    ///
-    /// By default, it is disabled.
-    pub text_multithreading: bool,
+    /// By default, it will be set to `16.0`.
+    pub default_text_size: Pixels,
 
     /// The antialiasing strategy that will be used for triangle primitives.
     ///
@@ -36,54 +29,51 @@ pub struct Settings {
     pub antialiasing: Option<Antialiasing>,
 }
 
-impl Settings {
-    /// Creates new [`Settings`] using environment configuration.
-    ///
-    /// Specifically:
-    ///
-    /// - The `internal_backend` can be configured using the `WGPU_BACKEND`
-    /// environment variable. If the variable is not set, the primary backend
-    /// will be used. The following values are allowed:
-    ///     - `vulkan`
-    ///     - `metal`
-    ///     - `dx12`
-    ///     - `dx11`
-    ///     - `gl`
-    ///     - `webgpu`
-    ///     - `primary`
-    pub fn from_env() -> Self {
-        Settings {
-            internal_backend: backend_from_env()
-                .unwrap_or(wgpu::Backends::all()),
-            ..Self::default()
-        }
-    }
-}
-
 impl Default for Settings {
     fn default() -> Settings {
         Settings {
-            present_mode: wgpu::PresentMode::Mailbox,
-            internal_backend: wgpu::Backends::all(),
-            default_font: None,
-            default_text_size: 20,
-            text_multithreading: false,
+            present_mode: wgpu::PresentMode::AutoVsync,
+            backends: wgpu::Backends::all(),
+            default_font: Font::default(),
+            default_text_size: Pixels(16.0),
             antialiasing: None,
         }
     }
 }
 
-fn backend_from_env() -> Option<wgpu::Backends> {
-    std::env::var("WGPU_BACKEND").ok().map(|backend| {
-        match backend.to_lowercase().as_str() {
-            "vulkan" => wgpu::Backends::VULKAN,
-            "metal" => wgpu::Backends::METAL,
-            "dx12" => wgpu::Backends::DX12,
-            "dx11" => wgpu::Backends::DX11,
-            "gl" => wgpu::Backends::GL,
-            "webgpu" => wgpu::Backends::BROWSER_WEBGPU,
-            "primary" => wgpu::Backends::PRIMARY,
-            other => panic!("Unknown backend: {}", other),
+impl From<graphics::Settings> for Settings {
+    fn from(settings: graphics::Settings) -> Self {
+        Self {
+            default_font: settings.default_font,
+            default_text_size: settings.default_text_size,
+            antialiasing: settings.antialiasing,
+            ..Settings::default()
         }
-    })
+    }
+}
+
+/// Obtains a [`wgpu::PresentMode`] from the current environment
+/// configuration, if set.
+///
+/// The value returned by this function can be changed by setting
+/// the `ICED_PRESENT_MODE` env variable. The possible values are:
+///
+/// - `vsync` → [`wgpu::PresentMode::AutoVsync`]
+/// - `no_vsync` → [`wgpu::PresentMode::AutoNoVsync`]
+/// - `immediate` → [`wgpu::PresentMode::Immediate`]
+/// - `fifo` → [`wgpu::PresentMode::Fifo`]
+/// - `fifo_relaxed` → [`wgpu::PresentMode::FifoRelaxed`]
+/// - `mailbox` → [`wgpu::PresentMode::Mailbox`]
+pub fn present_mode_from_env() -> Option<wgpu::PresentMode> {
+    let present_mode = std::env::var("ICED_PRESENT_MODE").ok()?;
+
+    match present_mode.to_lowercase().as_str() {
+        "vsync" => Some(wgpu::PresentMode::AutoVsync),
+        "no_vsync" => Some(wgpu::PresentMode::AutoNoVsync),
+        "immediate" => Some(wgpu::PresentMode::Immediate),
+        "fifo" => Some(wgpu::PresentMode::Fifo),
+        "fifo_relaxed" => Some(wgpu::PresentMode::FifoRelaxed),
+        "mailbox" => Some(wgpu::PresentMode::Mailbox),
+        _ => None,
+    }
 }

@@ -1,23 +1,28 @@
-use iced::{
-    alignment, button, executor, time, Alignment, Application, Button, Column,
-    Command, Container, Element, Length, Row, Settings, Subscription, Text,
-};
-use std::time::{Duration, Instant};
+use iced::keyboard;
+use iced::time::{self, milliseconds, Duration, Instant};
+use iced::widget::{button, center, column, row, text};
+use iced::{Center, Element, Subscription, Theme};
 
 pub fn main() -> iced::Result {
-    Stopwatch::run(Settings::default())
+    iced::application("Stopwatch - Iced", Stopwatch::update, Stopwatch::view)
+        .subscription(Stopwatch::subscription)
+        .theme(Stopwatch::theme)
+        .run()
 }
 
+#[derive(Default)]
 struct Stopwatch {
     duration: Duration,
     state: State,
-    toggle: button::State,
-    reset: button::State,
 }
 
+#[derive(Default)]
 enum State {
+    #[default]
     Idle,
-    Ticking { last_tick: Instant },
+    Ticking {
+        last_tick: Instant,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -27,28 +32,8 @@ enum Message {
     Tick(Instant),
 }
 
-impl Application for Stopwatch {
-    type Executor = executor::Default;
-    type Message = Message;
-    type Flags = ();
-
-    fn new(_flags: ()) -> (Stopwatch, Command<Message>) {
-        (
-            Stopwatch {
-                duration: Duration::default(),
-                state: State::Idle,
-                toggle: button::State::new(),
-                reset: button::State::new(),
-            },
-            Command::none(),
-        )
-    }
-
-    fn title(&self) -> String {
-        String::from("Stopwatch - Iced")
-    }
-
-    fn update(&mut self, message: Message) -> Command<Message> {
+impl Stopwatch {
+    fn update(&mut self, message: Message) {
         match message {
             Message::Toggle => match self.state {
                 State::Idle => {
@@ -60,111 +45,83 @@ impl Application for Stopwatch {
                     self.state = State::Idle;
                 }
             },
-            Message::Tick(now) => match &mut self.state {
-                State::Ticking { last_tick } => {
+            Message::Tick(now) => {
+                if let State::Ticking { last_tick } = &mut self.state {
                     self.duration += now - *last_tick;
                     *last_tick = now;
                 }
-                _ => {}
-            },
+            }
             Message::Reset => {
                 self.duration = Duration::default();
             }
         }
-
-        Command::none()
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        match self.state {
+        let tick = match self.state {
             State::Idle => Subscription::none(),
             State::Ticking { .. } => {
-                time::every(Duration::from_millis(10)).map(Message::Tick)
+                time::every(milliseconds(10)).map(Message::Tick)
+            }
+        };
+
+        fn handle_hotkey(
+            key: keyboard::Key,
+            _modifiers: keyboard::Modifiers,
+        ) -> Option<Message> {
+            use keyboard::key;
+
+            match key.as_ref() {
+                keyboard::Key::Named(key::Named::Space) => {
+                    Some(Message::Toggle)
+                }
+                keyboard::Key::Character("r") => Some(Message::Reset),
+                _ => None,
             }
         }
+
+        Subscription::batch(vec![tick, keyboard::on_key_press(handle_hotkey)])
     }
 
-    fn view(&mut self) -> Element<Message> {
+    fn view(&self) -> Element<Message> {
         const MINUTE: u64 = 60;
         const HOUR: u64 = 60 * MINUTE;
 
         let seconds = self.duration.as_secs();
 
-        let duration = Text::new(format!(
+        let duration = text!(
             "{:0>2}:{:0>2}:{:0>2}.{:0>2}",
             seconds / HOUR,
             (seconds % HOUR) / MINUTE,
             seconds % MINUTE,
             self.duration.subsec_millis() / 10,
-        ))
+        )
         .size(40);
 
-        let button = |state, label, style| {
-            Button::new(
-                state,
-                Text::new(label)
-                    .horizontal_alignment(alignment::Horizontal::Center),
-            )
-            .min_width(80)
-            .padding(10)
-            .style(style)
-        };
+        let button =
+            |label| button(text(label).align_x(Center)).padding(10).width(80);
 
         let toggle_button = {
-            let (label, color) = match self.state {
-                State::Idle => ("Start", style::Button::Primary),
-                State::Ticking { .. } => ("Stop", style::Button::Destructive),
+            let label = match self.state {
+                State::Idle => "Start",
+                State::Ticking { .. } => "Stop",
             };
 
-            button(&mut self.toggle, label, color).on_press(Message::Toggle)
+            button(label).on_press(Message::Toggle)
         };
 
-        let reset_button =
-            button(&mut self.reset, "Reset", style::Button::Secondary)
-                .on_press(Message::Reset);
+        let reset_button = button("Reset")
+            .style(button::danger)
+            .on_press(Message::Reset);
 
-        let controls = Row::new()
-            .spacing(20)
-            .push(toggle_button)
-            .push(reset_button);
+        let controls = row![toggle_button, reset_button].spacing(20);
 
-        let content = Column::new()
-            .align_items(Alignment::Center)
-            .spacing(20)
-            .push(duration)
-            .push(controls);
+        let content = column![duration, controls].align_x(Center).spacing(20);
 
-        Container::new(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x()
-            .center_y()
-            .into()
-    }
-}
-
-mod style {
-    use iced::{button, Background, Color, Vector};
-
-    pub enum Button {
-        Primary,
-        Secondary,
-        Destructive,
+        center(content).into()
     }
 
-    impl button::StyleSheet for Button {
-        fn active(&self) -> button::Style {
-            button::Style {
-                background: Some(Background::Color(match self {
-                    Button::Primary => Color::from_rgb(0.11, 0.42, 0.87),
-                    Button::Secondary => Color::from_rgb(0.5, 0.5, 0.5),
-                    Button::Destructive => Color::from_rgb(0.8, 0.2, 0.2),
-                })),
-                border_radius: 12.0,
-                shadow_offset: Vector::new(1.0, 1.0),
-                text_color: Color::WHITE,
-                ..button::Style::default()
-            }
-        }
+    fn theme(&self) -> Theme {
+        Theme::Dark
     }
 }

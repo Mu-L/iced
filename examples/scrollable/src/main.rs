@@ -1,255 +1,350 @@
-mod style;
-
-use iced::{
-    button, scrollable, Button, Column, Container, Element, Length,
-    ProgressBar, Radio, Row, Rule, Sandbox, Scrollable, Settings, Space, Text,
+use iced::widget::{
+    button, column, container, horizontal_space, progress_bar, radio, row,
+    scrollable, slider, text, vertical_space,
 };
+use iced::{Border, Center, Color, Element, Fill, Task, Theme};
+
+use std::sync::LazyLock;
+
+static SCROLLABLE_ID: LazyLock<scrollable::Id> =
+    LazyLock::new(scrollable::Id::unique);
 
 pub fn main() -> iced::Result {
-    ScrollableDemo::run(Settings::default())
+    iced::application(
+        "Scrollable - Iced",
+        ScrollableDemo::update,
+        ScrollableDemo::view,
+    )
+    .theme(ScrollableDemo::theme)
+    .run()
 }
 
 struct ScrollableDemo {
-    theme: style::Theme,
-    variants: Vec<Variant>,
+    scrollable_direction: Direction,
+    scrollbar_width: u16,
+    scrollbar_margin: u16,
+    scroller_width: u16,
+    current_scroll_offset: scrollable::RelativeOffset,
+    anchor: scrollable::Anchor,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Copy)]
+enum Direction {
+    Vertical,
+    Horizontal,
+    Multi,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    ThemeChanged(style::Theme),
-    ScrollToTop(usize),
-    ScrollToBottom(usize),
-    Scrolled(usize, f32),
+    SwitchDirection(Direction),
+    AlignmentChanged(scrollable::Anchor),
+    ScrollbarWidthChanged(u16),
+    ScrollbarMarginChanged(u16),
+    ScrollerWidthChanged(u16),
+    ScrollToBeginning,
+    ScrollToEnd,
+    Scrolled(scrollable::Viewport),
 }
 
-impl Sandbox for ScrollableDemo {
-    type Message = Message;
-
+impl ScrollableDemo {
     fn new() -> Self {
         ScrollableDemo {
-            theme: Default::default(),
-            variants: Variant::all(),
+            scrollable_direction: Direction::Vertical,
+            scrollbar_width: 10,
+            scrollbar_margin: 0,
+            scroller_width: 10,
+            current_scroll_offset: scrollable::RelativeOffset::START,
+            anchor: scrollable::Anchor::Start,
         }
     }
 
-    fn title(&self) -> String {
-        String::from("Scrollable - Iced")
-    }
-
-    fn update(&mut self, message: Message) {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::ThemeChanged(theme) => self.theme = theme,
-            Message::ScrollToTop(i) => {
-                if let Some(variant) = self.variants.get_mut(i) {
-                    variant.scrollable.snap_to(0.0);
+            Message::SwitchDirection(direction) => {
+                self.current_scroll_offset = scrollable::RelativeOffset::START;
+                self.scrollable_direction = direction;
 
-                    variant.latest_offset = 0.0;
-                }
+                scrollable::snap_to(
+                    SCROLLABLE_ID.clone(),
+                    self.current_scroll_offset,
+                )
             }
-            Message::ScrollToBottom(i) => {
-                if let Some(variant) = self.variants.get_mut(i) {
-                    variant.scrollable.snap_to(1.0);
+            Message::AlignmentChanged(alignment) => {
+                self.current_scroll_offset = scrollable::RelativeOffset::START;
+                self.anchor = alignment;
 
-                    variant.latest_offset = 1.0;
-                }
+                scrollable::snap_to(
+                    SCROLLABLE_ID.clone(),
+                    self.current_scroll_offset,
+                )
             }
-            Message::Scrolled(i, offset) => {
-                if let Some(variant) = self.variants.get_mut(i) {
-                    variant.latest_offset = offset;
-                }
+            Message::ScrollbarWidthChanged(width) => {
+                self.scrollbar_width = width;
+
+                Task::none()
+            }
+            Message::ScrollbarMarginChanged(margin) => {
+                self.scrollbar_margin = margin;
+
+                Task::none()
+            }
+            Message::ScrollerWidthChanged(width) => {
+                self.scroller_width = width;
+
+                Task::none()
+            }
+            Message::ScrollToBeginning => {
+                self.current_scroll_offset = scrollable::RelativeOffset::START;
+
+                scrollable::snap_to(
+                    SCROLLABLE_ID.clone(),
+                    self.current_scroll_offset,
+                )
+            }
+            Message::ScrollToEnd => {
+                self.current_scroll_offset = scrollable::RelativeOffset::END;
+
+                scrollable::snap_to(
+                    SCROLLABLE_ID.clone(),
+                    self.current_scroll_offset,
+                )
+            }
+            Message::Scrolled(viewport) => {
+                self.current_scroll_offset = viewport.relative_offset();
+
+                Task::none()
             }
         }
     }
 
-    fn view(&mut self) -> Element<Message> {
-        let ScrollableDemo {
-            theme, variants, ..
-        } = self;
-
-        let choose_theme = style::Theme::ALL.iter().fold(
-            Column::new().spacing(10).push(Text::new("Choose a theme:")),
-            |column, option| {
-                column.push(
-                    Radio::new(
-                        *option,
-                        format!("{:?}", option),
-                        Some(*theme),
-                        Message::ThemeChanged,
-                    )
-                    .style(*theme),
-                )
-            },
+    fn view(&self) -> Element<Message> {
+        let scrollbar_width_slider = slider(
+            0..=15,
+            self.scrollbar_width,
+            Message::ScrollbarWidthChanged,
         );
+        let scrollbar_margin_slider = slider(
+            0..=15,
+            self.scrollbar_margin,
+            Message::ScrollbarMarginChanged,
+        );
+        let scroller_width_slider =
+            slider(0..=15, self.scroller_width, Message::ScrollerWidthChanged);
 
-        let scrollable_row = Row::with_children(
-            variants
-                .iter_mut()
-                .enumerate()
-                .map(|(i, variant)| {
-                    let mut scrollable =
-                        Scrollable::new(&mut variant.scrollable)
-                            .padding(10)
-                            .spacing(10)
-                            .width(Length::Fill)
-                            .height(Length::Fill)
-                            .on_scroll(move |offset| {
-                                Message::Scrolled(i, offset)
-                            })
-                            .style(*theme)
-                            .push(Text::new(variant.title))
-                            .push(
-                                Button::new(
-                                    &mut variant.scroll_to_bottom,
-                                    Text::new("Scroll to bottom"),
-                                )
-                                .width(Length::Fill)
-                                .padding(10)
-                                .on_press(Message::ScrollToBottom(i)),
-                            );
+        let scroll_slider_controls = column![
+            text("Scrollbar width:"),
+            scrollbar_width_slider,
+            text("Scrollbar margin:"),
+            scrollbar_margin_slider,
+            text("Scroller width:"),
+            scroller_width_slider,
+        ]
+        .spacing(10);
 
-                    if let Some(scrollbar_width) = variant.scrollbar_width {
-                        scrollable = scrollable
-                            .scrollbar_width(scrollbar_width)
-                            .push(Text::new(format!(
-                                "scrollbar_width: {:?}",
-                                scrollbar_width
-                            )));
+        let scroll_orientation_controls = column![
+            text("Scrollbar direction:"),
+            radio(
+                "Vertical",
+                Direction::Vertical,
+                Some(self.scrollable_direction),
+                Message::SwitchDirection,
+            ),
+            radio(
+                "Horizontal",
+                Direction::Horizontal,
+                Some(self.scrollable_direction),
+                Message::SwitchDirection,
+            ),
+            radio(
+                "Both!",
+                Direction::Multi,
+                Some(self.scrollable_direction),
+                Message::SwitchDirection,
+            ),
+        ]
+        .spacing(10);
+
+        let scroll_alignment_controls = column![
+            text("Scrollable alignment:"),
+            radio(
+                "Start",
+                scrollable::Anchor::Start,
+                Some(self.anchor),
+                Message::AlignmentChanged,
+            ),
+            radio(
+                "End",
+                scrollable::Anchor::End,
+                Some(self.anchor),
+                Message::AlignmentChanged,
+            )
+        ]
+        .spacing(10);
+
+        let scroll_controls = row![
+            scroll_slider_controls,
+            scroll_orientation_controls,
+            scroll_alignment_controls
+        ]
+        .spacing(20);
+
+        let scroll_to_end_button = || {
+            button("Scroll to end")
+                .padding(10)
+                .on_press(Message::ScrollToEnd)
+        };
+
+        let scroll_to_beginning_button = || {
+            button("Scroll to beginning")
+                .padding(10)
+                .on_press(Message::ScrollToBeginning)
+        };
+
+        let scrollable_content: Element<Message> =
+            Element::from(match self.scrollable_direction {
+                Direction::Vertical => scrollable(
+                    column![
+                        scroll_to_end_button(),
+                        text("Beginning!"),
+                        vertical_space().height(1200),
+                        text("Middle!"),
+                        vertical_space().height(1200),
+                        text("End!"),
+                        scroll_to_beginning_button(),
+                    ]
+                    .align_x(Center)
+                    .padding([40, 0])
+                    .spacing(40),
+                )
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new()
+                        .width(self.scrollbar_width)
+                        .margin(self.scrollbar_margin)
+                        .scroller_width(self.scroller_width)
+                        .anchor(self.anchor),
+                ))
+                .width(Fill)
+                .height(Fill)
+                .id(SCROLLABLE_ID.clone())
+                .on_scroll(Message::Scrolled),
+                Direction::Horizontal => scrollable(
+                    row![
+                        scroll_to_end_button(),
+                        text("Beginning!"),
+                        horizontal_space().width(1200),
+                        text("Middle!"),
+                        horizontal_space().width(1200),
+                        text("End!"),
+                        scroll_to_beginning_button(),
+                    ]
+                    .height(450)
+                    .align_y(Center)
+                    .padding([0, 40])
+                    .spacing(40),
+                )
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::new()
+                        .width(self.scrollbar_width)
+                        .margin(self.scrollbar_margin)
+                        .scroller_width(self.scroller_width)
+                        .anchor(self.anchor),
+                ))
+                .width(Fill)
+                .height(Fill)
+                .id(SCROLLABLE_ID.clone())
+                .on_scroll(Message::Scrolled),
+                Direction::Multi => scrollable(
+                    //horizontal content
+                    row![
+                        column![
+                            text("Let's do some scrolling!"),
+                            vertical_space().height(2400)
+                        ],
+                        scroll_to_end_button(),
+                        text("Horizontal - Beginning!"),
+                        horizontal_space().width(1200),
+                        //vertical content
+                        column![
+                            text("Horizontal - Middle!"),
+                            scroll_to_end_button(),
+                            text("Vertical - Beginning!"),
+                            vertical_space().height(1200),
+                            text("Vertical - Middle!"),
+                            vertical_space().height(1200),
+                            text("Vertical - End!"),
+                            scroll_to_beginning_button(),
+                            vertical_space().height(40),
+                        ]
+                        .spacing(40),
+                        horizontal_space().width(1200),
+                        text("Horizontal - End!"),
+                        scroll_to_beginning_button(),
+                    ]
+                    .align_y(Center)
+                    .padding([0, 40])
+                    .spacing(40),
+                )
+                .direction({
+                    let scrollbar = scrollable::Scrollbar::new()
+                        .width(self.scrollbar_width)
+                        .margin(self.scrollbar_margin)
+                        .scroller_width(self.scroller_width)
+                        .anchor(self.anchor);
+
+                    scrollable::Direction::Both {
+                        horizontal: scrollbar,
+                        vertical: scrollbar,
                     }
-
-                    if let Some(scrollbar_margin) = variant.scrollbar_margin {
-                        scrollable = scrollable
-                            .scrollbar_margin(scrollbar_margin)
-                            .push(Text::new(format!(
-                                "scrollbar_margin: {:?}",
-                                scrollbar_margin
-                            )));
-                    }
-
-                    if let Some(scroller_width) = variant.scroller_width {
-                        scrollable = scrollable
-                            .scroller_width(scroller_width)
-                            .push(Text::new(format!(
-                                "scroller_width: {:?}",
-                                scroller_width
-                            )));
-                    }
-
-                    scrollable = scrollable
-                        .push(Space::with_height(Length::Units(100)))
-                        .push(Text::new(
-                            "Some content that should wrap within the \
-                            scrollable. Let's output a lot of short words, so \
-                            that we'll make sure to see how wrapping works \
-                            with these scrollbars.",
-                        ))
-                        .push(Space::with_height(Length::Units(1200)))
-                        .push(Text::new("Middle"))
-                        .push(Space::with_height(Length::Units(1200)))
-                        .push(Text::new("The End."))
-                        .push(
-                            Button::new(
-                                &mut variant.scroll_to_top,
-                                Text::new("Scroll to top"),
-                            )
-                            .width(Length::Fill)
-                            .padding(10)
-                            .on_press(Message::ScrollToTop(i)),
-                        );
-
-                    Column::new()
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .spacing(10)
-                        .push(
-                            Container::new(scrollable)
-                                .width(Length::Fill)
-                                .height(Length::Fill)
-                                .style(*theme),
-                        )
-                        .push(ProgressBar::new(
-                            0.0..=1.0,
-                            variant.latest_offset,
-                        ))
-                        .into()
                 })
-                .collect(),
-        )
-        .spacing(20)
-        .width(Length::Fill)
-        .height(Length::Fill);
+                .width(Fill)
+                .height(Fill)
+                .id(SCROLLABLE_ID.clone())
+                .on_scroll(Message::Scrolled),
+            });
 
-        let content = Column::new()
-            .spacing(20)
-            .padding(20)
-            .push(choose_theme)
-            .push(Rule::horizontal(20).style(self.theme))
-            .push(scrollable_row);
+        let progress_bars: Element<Message> = match self.scrollable_direction {
+            Direction::Vertical => {
+                progress_bar(0.0..=1.0, self.current_scroll_offset.y).into()
+            }
+            Direction::Horizontal => {
+                progress_bar(0.0..=1.0, self.current_scroll_offset.x)
+                    .style(progress_bar_custom_style)
+                    .into()
+            }
+            Direction::Multi => column![
+                progress_bar(0.0..=1.0, self.current_scroll_offset.y),
+                progress_bar(0.0..=1.0, self.current_scroll_offset.x)
+                    .style(progress_bar_custom_style)
+            ]
+            .spacing(10)
+            .into(),
+        };
 
-        Container::new(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x()
-            .center_y()
-            .style(self.theme)
-            .into()
+        let content: Element<Message> =
+            column![scroll_controls, scrollable_content, progress_bars]
+                .align_x(Center)
+                .spacing(10)
+                .into();
+
+        container(content).padding(20).into()
+    }
+
+    fn theme(&self) -> Theme {
+        Theme::Dark
     }
 }
 
-/// A version of a scrollable
-struct Variant {
-    title: &'static str,
-    scrollable: scrollable::State,
-    scroll_to_top: button::State,
-    scroll_to_bottom: button::State,
-    scrollbar_width: Option<u16>,
-    scrollbar_margin: Option<u16>,
-    scroller_width: Option<u16>,
-    latest_offset: f32,
+impl Default for ScrollableDemo {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-impl Variant {
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self {
-                title: "Default Scrollbar",
-                scrollable: scrollable::State::new(),
-                scroll_to_top: button::State::new(),
-                scroll_to_bottom: button::State::new(),
-                scrollbar_width: None,
-                scrollbar_margin: None,
-                scroller_width: None,
-                latest_offset: 0.0,
-            },
-            Self {
-                title: "Slimmed & Margin",
-                scrollable: scrollable::State::new(),
-                scroll_to_top: button::State::new(),
-                scroll_to_bottom: button::State::new(),
-                scrollbar_width: Some(4),
-                scrollbar_margin: Some(3),
-                scroller_width: Some(4),
-                latest_offset: 0.0,
-            },
-            Self {
-                title: "Wide Scroller",
-                scrollable: scrollable::State::new(),
-                scroll_to_top: button::State::new(),
-                scroll_to_bottom: button::State::new(),
-                scrollbar_width: Some(4),
-                scrollbar_margin: None,
-                scroller_width: Some(10),
-                latest_offset: 0.0,
-            },
-            Self {
-                title: "Narrow Scroller",
-                scrollable: scrollable::State::new(),
-                scroll_to_top: button::State::new(),
-                scroll_to_bottom: button::State::new(),
-                scrollbar_width: Some(10),
-                scrollbar_margin: None,
-                scroller_width: Some(4),
-                latest_offset: 0.0,
-            },
-        ]
+fn progress_bar_custom_style(theme: &Theme) -> progress_bar::Style {
+    progress_bar::Style {
+        background: theme.extended_palette().background.strong.color.into(),
+        bar: Color::from_rgb8(250, 85, 134).into(),
+        border: Border::default(),
     }
 }

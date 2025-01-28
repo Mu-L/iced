@@ -1,86 +1,104 @@
+use crate::core::svg;
+use crate::core::{Color, Size};
 use crate::image::atlas::{self, Atlas};
 
-use iced_native::svg;
-
-use std::collections::{HashMap, HashSet};
+use resvg::tiny_skia;
+use resvg::usvg;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
+use std::sync::Arc;
 
+/// Entry in cache corresponding to an svg handle
 pub enum Svg {
+    /// Parsed svg
     Loaded(usvg::Tree),
+    /// Svg not found or failed to parse
     NotFound,
 }
 
 impl Svg {
-    pub fn viewport_dimensions(&self) -> (u32, u32) {
+    /// Viewport width and height
+    pub fn viewport_dimensions(&self) -> Size<u32> {
         match self {
             Svg::Loaded(tree) => {
-                let size = tree.svg_node().size;
+                let size = tree.size();
 
-                (size.width() as u32, size.height() as u32)
+                Size::new(size.width() as u32, size.height() as u32)
             }
-            Svg::NotFound => (1, 1),
+            Svg::NotFound => Size::new(1, 1),
         }
     }
 }
 
-#[derive(Debug)]
+/// Caches svg vector and raster data
+#[derive(Debug, Default)]
 pub struct Cache {
-    svgs: HashMap<u64, Svg>,
-    rasterized: HashMap<(u64, u32, u32), atlas::Entry>,
-    svg_hits: HashSet<u64>,
-    rasterized_hits: HashSet<(u64, u32, u32)>,
+    svgs: FxHashMap<u64, Svg>,
+    rasterized: FxHashMap<(u64, u32, u32, ColorFilter), atlas::Entry>,
+    svg_hits: FxHashSet<u64>,
+    rasterized_hits: FxHashSet<(u64, u32, u32, ColorFilter)>,
+    should_trim: bool,
+    fontdb: Option<Arc<usvg::fontdb::Database>>,
 }
+
+type ColorFilter = Option<[u8; 4]>;
 
 impl Cache {
-    pub fn new() -> Self {
-        Self {
-            svgs: HashMap::new(),
-            rasterized: HashMap::new(),
-            svg_hits: HashSet::new(),
-            rasterized_hits: HashSet::new(),
-        }
-    }
-
+    /// Load svg
     pub fn load(&mut self, handle: &svg::Handle) -> &Svg {
         if self.svgs.contains_key(&handle.id()) {
             return self.svgs.get(&handle.id()).unwrap();
         }
 
-        let svg = match handle.data() {
-            svg::Data::Path(path) => {
-                let tree = fs::read_to_string(path).ok().and_then(|contents| {
-                    usvg::Tree::from_str(
-                        &contents,
-                        &usvg::Options::default().to_ref(),
-                    )
-                    .ok()
-                });
+        // TODO: Reuse `cosmic-text` font database
+        if self.fontdb.is_none() {
+            let mut fontdb = usvg::fontdb::Database::new();
+            fontdb.load_system_fonts();
 
-                tree.map(Svg::Loaded).unwrap_or(Svg::NotFound)
-            }
+            self.fontdb = Some(Arc::new(fontdb));
+        }
+
+        let options = usvg::Options {
+            fontdb: self
+                .fontdb
+                .as_ref()
+                .expect("fontdb must be initialized")
+                .clone(),
+            ..usvg::Options::default()
+        };
+
+        let svg = match handle.data() {
+            svg::Data::Path(path) => fs::read_to_string(path)
+                .ok()
+                .and_then(|contents| {
+                    usvg::Tree::from_str(&contents, &options).ok()
+                })
+                .map(Svg::Loaded)
+                .unwrap_or(Svg::NotFound),
             svg::Data::Bytes(bytes) => {
-                match usvg::Tree::from_data(
-                    &bytes,
-                    &usvg::Options::default().to_ref(),
-                ) {
+                match usvg::Tree::from_data(bytes, &options) {
                     Ok(tree) => Svg::Loaded(tree),
                     Err(_) => Svg::NotFound,
                 }
             }
         };
 
+        self.should_trim = true;
+
         let _ = self.svgs.insert(handle.id(), svg);
         self.svgs.get(&handle.id()).unwrap()
     }
 
+    /// Load svg and upload raster data
     pub fn upload(
         &mut self,
-        handle: &svg::Handle,
-        [width, height]: [f32; 2],
-        scale: f32,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        texture_atlas: &mut Atlas,
+        handle: &svg::Handle,
+        color: Option<Color>,
+        [width, height]: [f32; 2],
+        scale: f32,
+        atlas: &mut Atlas,
     ) -> Option<&atlas::Entry> {
         let id = handle.id();
 
@@ -89,15 +107,18 @@ impl Cache {
             (scale * height).ceil() as u32,
         );
 
+        let color = color.map(Color::into_rgba8);
+        let key = (id, width, height, color);
+
         // TODO: Optimize!
         // We currently rerasterize the SVG when its size changes. This is slow
         // as heck. A GPU rasterizer like `pathfinder` may perform better.
         // It would be cool to be able to smooth resize the `svg` example.
-        if self.rasterized.contains_key(&(id, width, height)) {
+        if self.rasterized.contains_key(&key) {
             let _ = self.svg_hits.insert(id);
-            let _ = self.rasterized_hits.insert((id, width, height));
+            let _ = self.rasterized_hits.insert(key);
 
-            return self.rasterized.get(&(id, width, height));
+            return self.rasterized.get(&key);
         }
 
         match self.load(handle) {
@@ -112,39 +133,61 @@ impl Cache {
                 // It would be cool to be able to smooth resize the `svg` example.
                 let mut img = tiny_skia::Pixmap::new(width, height)?;
 
-                let _ = resvg::render(
-                    tree,
-                    if width > height {
-                        usvg::FitTo::Width(width)
-                    } else {
-                        usvg::FitTo::Height(height)
-                    },
-                    img.as_mut(),
-                )?;
+                let tree_size = tree.size().to_int_size();
+
+                let target_size = if width > height {
+                    tree_size.scale_to_width(width)
+                } else {
+                    tree_size.scale_to_height(height)
+                };
+
+                let transform = if let Some(target_size) = target_size {
+                    let tree_size = tree_size.to_size();
+                    let target_size = target_size.to_size();
+
+                    tiny_skia::Transform::from_scale(
+                        target_size.width() / tree_size.width(),
+                        target_size.height() / tree_size.height(),
+                    )
+                } else {
+                    tiny_skia::Transform::default()
+                };
+
+                resvg::render(tree, transform, &mut img.as_mut());
 
                 let mut rgba = img.take();
-                rgba.chunks_exact_mut(4).for_each(|rgba| rgba.swap(0, 2));
 
-                let allocation = texture_atlas.upload(
-                    width,
-                    height,
-                    bytemuck::cast_slice(rgba.as_slice()),
-                    device,
-                    encoder,
-                )?;
-                log::debug!("allocating {} {}x{}", id, width, height);
+                if let Some(color) = color {
+                    rgba.chunks_exact_mut(4).for_each(|rgba| {
+                        if rgba[3] > 0 {
+                            rgba[0] = color[0];
+                            rgba[1] = color[1];
+                            rgba[2] = color[2];
+                        }
+                    });
+                }
+
+                let allocation =
+                    atlas.upload(device, encoder, width, height, &rgba)?;
+
+                log::debug!("allocating {id} {width}x{height}");
 
                 let _ = self.svg_hits.insert(id);
-                let _ = self.rasterized_hits.insert((id, width, height));
-                let _ = self.rasterized.insert((id, width, height), allocation);
+                let _ = self.rasterized_hits.insert(key);
+                let _ = self.rasterized.insert(key, allocation);
 
-                self.rasterized.get(&(id, width, height))
+                self.rasterized.get(&key)
             }
             Svg::NotFound => None,
         }
     }
 
+    /// Load svg and upload raster data
     pub fn trim(&mut self, atlas: &mut Atlas) {
+        if !self.should_trim {
+            return;
+        }
+
         let svg_hits = &self.svg_hits;
         let rasterized_hits = &self.rasterized_hits;
 
@@ -160,6 +203,7 @@ impl Cache {
         });
         self.svg_hits.clear();
         self.rasterized_hits.clear();
+        self.should_trim = false;
     }
 }
 

@@ -5,8 +5,8 @@ A simple UI tour that can run both on native platforms and the web! It showcases
 The __[`main`]__ file contains all the code of the example! All the cross-platform GUI is defined in terms of __state__, __messages__, __update logic__ and __view logic__.
 
 <div align="center">
-  <a href="https://gfycat.com/politeadorableiberianmole">
-    <img src="https://thumbs.gfycat.com/PoliteAdorableIberianmole-small.gif">
+  <a href="https://iced.rs/examples/tour.mp4">
+    <img src="https://iced.rs/examples/tour.gif">
   </a>
 </div>
 
@@ -23,6 +23,11 @@ You can run the native version with `cargo run`:
 cargo run --package tour
 ```
 
-The web version can be run by following [the usage instructions of `iced_web`] or by accessing [iced.rs](https://iced.rs/)!
+The web version can be run with [`trunk`]:
 
-[the usage instructions of `iced_web`]: https://github.com/iced-rs/iced_web#usage
+```
+cd examples/tour
+trunk serve
+```
+
+[`trunk`]: https://trunkrs.dev/

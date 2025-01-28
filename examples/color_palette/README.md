@@ -3,9 +3,7 @@
 A color palette generator, based on a user-defined root color.
 
 <div align="center">
-  <a href="https://gfycat.com/dirtylonebighornsheep">
-    <img src="screenshot.png">
-  </a>
+  <img src="screenshot.png">
 </div>
 
 You can run it with `cargo run`:

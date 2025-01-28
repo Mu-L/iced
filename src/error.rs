@@ -1,4 +1,6 @@
-use iced_futures::futures;
+use crate::futures;
+use crate::graphics;
+use crate::shell;
 
 /// An error that occurred while running an application.
 #[derive(Debug, thiserror::Error)]
@@ -11,22 +13,22 @@ pub enum Error {
     #[error("the application window could not be created")]
     WindowCreationFailed(Box<dyn std::error::Error + Send + Sync>),
 
-    /// A suitable graphics adapter or device could not be found.
-    #[error("a suitable graphics adapter or device could not be found")]
-    GraphicsAdapterNotFound,
+    /// The application graphics context could not be created.
+    #[error("the application graphics context could not be created")]
+    GraphicsCreationFailed(graphics::Error),
 }
 
-impl From<iced_winit::Error> for Error {
-    fn from(error: iced_winit::Error) -> Error {
+impl From<shell::Error> for Error {
+    fn from(error: shell::Error) -> Error {
         match error {
-            iced_winit::Error::ExecutorCreationFailed(error) => {
+            shell::Error::ExecutorCreationFailed(error) => {
                 Error::ExecutorCreationFailed(error)
             }
-            iced_winit::Error::WindowCreationFailed(error) => {
+            shell::Error::WindowCreationFailed(error) => {
                 Error::WindowCreationFailed(Box::new(error))
             }
-            iced_winit::Error::GraphicsAdapterNotFound => {
-                Error::GraphicsAdapterNotFound
+            shell::Error::GraphicsCreationFailed(error) => {
+                Error::GraphicsCreationFailed(error)
             }
         }
     }

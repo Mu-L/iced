@@ -1,5 +1,5 @@
 /// A 2D vector.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vector<T = f32> {
     /// The X component of the [`Vector`]
     pub x: T,
@@ -12,6 +12,22 @@ impl<T> Vector<T> {
     /// Creates a new [`Vector`] with the given components.
     pub const fn new(x: T, y: T) -> Self {
         Self { x, y }
+    }
+}
+
+impl Vector {
+    /// The zero [`Vector`].
+    pub const ZERO: Self = Self::new(0.0, 0.0);
+}
+
+impl<T> std::ops::Neg for Vector<T>
+where
+    T: std::ops::Neg<Output = T>,
+{
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self::new(-self.x, -self.y)
     }
 }
 

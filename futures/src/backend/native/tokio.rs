@@ -9,6 +9,7 @@ impl crate::Executor for Executor {
         tokio::runtime::Runtime::new()
     }
 
+    #[allow(clippy::let_underscore_future)]
     fn spawn(&self, future: impl Future<Output = ()> + Send + 'static) {
         let _ = tokio::runtime::Runtime::spawn(self, future);
     }
@@ -21,52 +22,57 @@ impl crate::Executor for Executor {
 
 pub mod time {
     //! Listen and react to time.
-    use crate::subscription::{self, Subscription};
+    use crate::core::time::{Duration, Instant};
+    use crate::stream;
+    use crate::subscription::Subscription;
+    use crate::MaybeSend;
+
+    use futures::SinkExt;
+    use std::future::Future;
 
     /// Returns a [`Subscription`] that produces messages at a set interval.
     ///
     /// The first message is produced after a `duration`, and then continues to
     /// produce more messages every `duration` after that.
-    pub fn every<H: std::hash::Hasher, E>(
-        duration: std::time::Duration,
-    ) -> Subscription<H, E, std::time::Instant> {
-        Subscription::from_recipe(Every(duration))
-    }
-
-    #[derive(Debug)]
-    struct Every(std::time::Duration);
-
-    impl<H, E> subscription::Recipe<H, E> for Every
-    where
-        H: std::hash::Hasher,
-    {
-        type Output = std::time::Instant;
-
-        fn hash(&self, state: &mut H) {
-            use std::hash::Hash;
-
-            std::any::TypeId::of::<Self>().hash(state);
-            self.0.hash(state);
-        }
-
-        fn stream(
-            self: Box<Self>,
-            _input: futures::stream::BoxStream<'static, E>,
-        ) -> futures::stream::BoxStream<'static, Self::Output> {
+    pub fn every(duration: Duration) -> Subscription<Instant> {
+        Subscription::run_with(duration, |duration| {
             use futures::stream::StreamExt;
 
-            let start = tokio::time::Instant::now() + self.0;
+            let start = tokio::time::Instant::now() + *duration;
+
+            let mut interval = tokio::time::interval_at(start, *duration);
+            interval.set_missed_tick_behavior(
+                tokio::time::MissedTickBehavior::Skip,
+            );
 
             let stream = {
-                futures::stream::unfold(
-                    tokio::time::interval_at(start, self.0),
-                    |mut interval| async move {
-                        Some((interval.tick().await, interval))
-                    },
-                )
+                futures::stream::unfold(interval, |mut interval| async move {
+                    Some((interval.tick().await, interval))
+                })
             };
 
             stream.map(tokio::time::Instant::into_std).boxed()
-        }
+        })
+    }
+
+    /// Returns a [`Subscription`] that runs the given async function at a
+    /// set interval; producing the result of the function as output.
+    pub fn repeat<F, T>(f: fn() -> F, interval: Duration) -> Subscription<T>
+    where
+        F: Future<Output = T> + MaybeSend + 'static,
+        T: MaybeSend + 'static,
+    {
+        Subscription::run_with((f, interval), |(f, interval)| {
+            let f = *f;
+            let interval = *interval;
+
+            stream::channel(1, move |mut output| async move {
+                loop {
+                    let _ = output.send(f().await).await;
+
+                    tokio::time::sleep(interval).await;
+                }
+            })
+        })
     }
 }

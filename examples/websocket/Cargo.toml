@@ -1,22 +1,20 @@
 [package]
 name = "websocket"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Héctor Ramón Jiménez <hector0193@gmail.com>"]
 edition = "2021"
 publish = false
 
 [dependencies]
-iced = { path = "../..", features = ["tokio", "debug"] }
-iced_native = { path = "../../native" }
-iced_futures = { path = "../../futures" }
+iced.workspace = true
+iced.features = ["debug", "tokio"]
+
+warp = "0.3"
 
 [dependencies.async-tungstenite]
-version = "0.16"
+version = "0.25"
 features = ["tokio-rustls-webpki-roots"]
 
 [dependencies.tokio]
-version = "1"
+workspace = true
 features = ["time"]
-
-[dependencies.warp]
-version = "0.3"

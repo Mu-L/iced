@@ -33,6 +33,10 @@ impl Allocator {
     pub fn is_empty(&self) -> bool {
         self.allocations == 0
     }
+
+    pub fn allocations(&self) -> usize {
+        self.allocations
+    }
 }
 
 pub struct Region {
@@ -46,10 +50,10 @@ impl Region {
         (rectangle.min.x as u32, rectangle.min.y as u32)
     }
 
-    pub fn size(&self) -> (u32, u32) {
+    pub fn size(&self) -> crate::core::Size<u32> {
         let size = self.allocation.rectangle.size();
 
-        (size.width as u32, size.height as u32)
+        crate::core::Size::new(size.width as u32, size.height as u32)
     }
 }
 

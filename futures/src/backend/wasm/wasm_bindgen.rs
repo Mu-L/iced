@@ -1,4 +1,4 @@
-//! A `wasm-bindgein-futures` backend.
+//! A `wasm-bindgen-futures` backend.
 
 /// A `wasm-bindgen-futures` executor.
 #[derive(Debug)]
@@ -16,29 +16,26 @@ impl crate::Executor for Executor {
 
 pub mod time {
     //! Listen and react to time.
-    use crate::subscription::{self, Subscription};
+    use crate::subscription::{self, Hasher, Subscription};
     use crate::BoxStream;
 
     /// Returns a [`Subscription`] that produces messages at a set interval.
     ///
     /// The first message is produced after a `duration`, and then continues to
     /// produce more messages every `duration` after that.
-    pub fn every<H: std::hash::Hasher, E>(
+    pub fn every(
         duration: std::time::Duration,
-    ) -> Subscription<H, E, wasm_timer::Instant> {
-        Subscription::from_recipe(Every(duration))
+    ) -> Subscription<wasm_timer::Instant> {
+        subscription::from_recipe(Every(duration))
     }
 
     #[derive(Debug)]
     struct Every(std::time::Duration);
 
-    impl<H, E> subscription::Recipe<H, E> for Every
-    where
-        H: std::hash::Hasher,
-    {
+    impl subscription::Recipe for Every {
         type Output = wasm_timer::Instant;
 
-        fn hash(&self, state: &mut H) {
+        fn hash(&self, state: &mut Hasher) {
             use std::hash::Hash;
 
             std::any::TypeId::of::<Self>().hash(state);
@@ -47,7 +44,7 @@ pub mod time {
 
         fn stream(
             self: Box<Self>,
-            _input: BoxStream<E>,
+            _input: subscription::EventStream,
         ) -> BoxStream<Self::Output> {
             use futures::stream::StreamExt;
 

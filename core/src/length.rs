@@ -1,5 +1,7 @@
+use crate::Pixels;
+
 /// The strategy used to fill space in a specific dimension.
-#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Length {
     /// Fill all the remaining space
     Fill,
@@ -17,7 +19,7 @@ pub enum Length {
     Shrink,
 
     /// Fill a fixed amount of space
-    Units(u16),
+    Fixed(f32),
 }
 
 impl Length {
@@ -31,13 +33,52 @@ impl Length {
             Length::Fill => 1,
             Length::FillPortion(factor) => *factor,
             Length::Shrink => 0,
-            Length::Units(_) => 0,
+            Length::Fixed(_) => 0,
         }
+    }
+
+    /// Returns `true` iff the [`Length`] is either [`Length::Fill`] or
+    // [`Length::FillPortion`].
+    pub fn is_fill(&self) -> bool {
+        self.fill_factor() != 0
+    }
+
+    /// Returns the "fluid" variant of the [`Length`].
+    ///
+    /// Specifically:
+    /// - [`Length::Shrink`] if [`Length::Shrink`] or [`Length::Fixed`].
+    /// - [`Length::Fill`] otherwise.
+    pub fn fluid(&self) -> Self {
+        match self {
+            Length::Fill | Length::FillPortion(_) => Length::Fill,
+            Length::Shrink | Length::Fixed(_) => Length::Shrink,
+        }
+    }
+
+    /// Adapts the [`Length`] so it can contain the other [`Length`] and
+    /// match its fluidity.
+    pub fn enclose(self, other: Length) -> Self {
+        match (self, other) {
+            (Length::Shrink, Length::Fill | Length::FillPortion(_)) => other,
+            _ => self,
+        }
+    }
+}
+
+impl From<Pixels> for Length {
+    fn from(amount: Pixels) -> Self {
+        Length::Fixed(f32::from(amount))
+    }
+}
+
+impl From<f32> for Length {
+    fn from(amount: f32) -> Self {
+        Length::Fixed(amount)
     }
 }
 
 impl From<u16> for Length {
     fn from(units: u16) -> Self {
-        Length::Units(units)
+        Length::Fixed(f32::from(units))
     }
 }

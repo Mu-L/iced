@@ -1,20 +1,18 @@
 //! This example showcases an interactive `Canvas` for drawing Bézier curves.
-use iced::{
-    button, Alignment, Button, Column, Element, Length, Sandbox, Settings, Text,
-};
+use iced::widget::{button, container, horizontal_space, hover, right};
+use iced::{Element, Theme};
 
 pub fn main() -> iced::Result {
-    Example::run(Settings {
-        antialiasing: true,
-        ..Settings::default()
-    })
+    iced::application("Bezier Tool - Iced", Example::update, Example::view)
+        .theme(|_| Theme::CatppuccinMocha)
+        .antialiasing(true)
+        .run()
 }
 
 #[derive(Default)]
 struct Example {
     bezier: bezier::State,
     curves: Vec<bezier::Curve>,
-    button_state: button::State,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -23,17 +21,7 @@ enum Message {
     Clear,
 }
 
-impl Sandbox for Example {
-    type Message = Message;
-
-    fn new() -> Self {
-        Example::default()
-    }
-
-    fn title(&self) -> String {
-        String::from("Bezier tool - Iced")
-    }
-
+impl Example {
     fn update(&mut self, message: Message) {
         match message {
             Message::AddCurve(curve) => {
@@ -47,132 +35,133 @@ impl Sandbox for Example {
         }
     }
 
-    fn view(&mut self) -> Element<Message> {
-        Column::new()
-            .padding(20)
-            .spacing(20)
-            .align_items(Alignment::Center)
-            .push(
-                Text::new("Bezier tool example")
-                    .width(Length::Shrink)
-                    .size(50),
-            )
-            .push(self.bezier.view(&self.curves).map(Message::AddCurve))
-            .push(
-                Button::new(&mut self.button_state, Text::new("Clear"))
-                    .padding(8)
-                    .on_press(Message::Clear),
-            )
-            .into()
+    fn view(&self) -> Element<Message> {
+        container(hover(
+            self.bezier.view(&self.curves).map(Message::AddCurve),
+            if self.curves.is_empty() {
+                container(horizontal_space())
+            } else {
+                right(
+                    button("Clear")
+                        .style(button::danger)
+                        .on_press(Message::Clear),
+                )
+                .padding(10)
+            },
+        ))
+        .padding(20)
+        .into()
     }
 }
 
 mod bezier {
-    use iced::{
-        canvas::event::{self, Event},
-        canvas::{self, Canvas, Cursor, Frame, Geometry, Path, Stroke},
-        mouse, Element, Length, Point, Rectangle,
+    use iced::mouse;
+    use iced::widget::canvas::{
+        self, Canvas, Event, Frame, Geometry, Path, Stroke,
     };
+    use iced::{Element, Fill, Point, Rectangle, Renderer, Theme};
 
     #[derive(Default)]
     pub struct State {
-        pending: Option<Pending>,
         cache: canvas::Cache,
     }
 
     impl State {
-        pub fn view<'a>(
-            &'a mut self,
-            curves: &'a [Curve],
-        ) -> Element<'a, Curve> {
+        pub fn view<'a>(&'a self, curves: &'a [Curve]) -> Element<'a, Curve> {
             Canvas::new(Bezier {
                 state: self,
                 curves,
             })
-            .width(Length::Fill)
-            .height(Length::Fill)
+            .width(Fill)
+            .height(Fill)
             .into()
         }
 
         pub fn request_redraw(&mut self) {
-            self.cache.clear()
+            self.cache.clear();
         }
     }
 
     struct Bezier<'a> {
-        state: &'a mut State,
+        state: &'a State,
         curves: &'a [Curve],
     }
 
-    impl<'a> canvas::Program<Curve> for Bezier<'a> {
+    impl canvas::Program<Curve> for Bezier<'_> {
+        type State = Option<Pending>;
+
         fn update(
-            &mut self,
+            &self,
+            state: &mut Self::State,
             event: Event,
             bounds: Rectangle,
-            cursor: Cursor,
-        ) -> (event::Status, Option<Curve>) {
-            let cursor_position =
-                if let Some(position) = cursor.position_in(&bounds) {
-                    position
-                } else {
-                    return (event::Status::Ignored, None);
-                };
+            cursor: mouse::Cursor,
+        ) -> Option<canvas::Action<Curve>> {
+            let cursor_position = cursor.position_in(bounds)?;
 
             match event {
-                Event::Mouse(mouse_event) => {
-                    let message = match mouse_event {
-                        mouse::Event::ButtonPressed(mouse::Button::Left) => {
-                            match self.state.pending {
-                                None => {
-                                    self.state.pending = Some(Pending::One {
-                                        from: cursor_position,
-                                    });
+                Event::Mouse(mouse::Event::ButtonPressed(
+                    mouse::Button::Left,
+                )) => Some(
+                    match *state {
+                        None => {
+                            *state = Some(Pending::One {
+                                from: cursor_position,
+                            });
 
-                                    None
-                                }
-                                Some(Pending::One { from }) => {
-                                    self.state.pending = Some(Pending::Two {
-                                        from,
-                                        to: cursor_position,
-                                    });
-
-                                    None
-                                }
-                                Some(Pending::Two { from, to }) => {
-                                    self.state.pending = None;
-
-                                    Some(Curve {
-                                        from,
-                                        to,
-                                        control: cursor_position,
-                                    })
-                                }
-                            }
+                            canvas::Action::request_redraw()
                         }
-                        _ => None,
-                    };
+                        Some(Pending::One { from }) => {
+                            *state = Some(Pending::Two {
+                                from,
+                                to: cursor_position,
+                            });
 
-                    (event::Status::Captured, message)
+                            canvas::Action::request_redraw()
+                        }
+                        Some(Pending::Two { from, to }) => {
+                            *state = None;
+
+                            canvas::Action::publish(Curve {
+                                from,
+                                to,
+                                control: cursor_position,
+                            })
+                        }
+                    }
+                    .and_capture(),
+                ),
+                Event::Mouse(mouse::Event::CursorMoved { .. })
+                    if state.is_some() =>
+                {
+                    Some(canvas::Action::request_redraw())
                 }
-                _ => (event::Status::Ignored, None),
+                _ => None,
             }
         }
 
-        fn draw(&self, bounds: Rectangle, cursor: Cursor) -> Vec<Geometry> {
+        fn draw(
+            &self,
+            state: &Self::State,
+            renderer: &Renderer,
+            theme: &Theme,
+            bounds: Rectangle,
+            cursor: mouse::Cursor,
+        ) -> Vec<Geometry> {
             let content =
-                self.state.cache.draw(bounds.size(), |frame: &mut Frame| {
-                    Curve::draw_all(self.curves, frame);
+                self.state.cache.draw(renderer, bounds.size(), |frame| {
+                    Curve::draw_all(self.curves, frame, theme);
 
                     frame.stroke(
                         &Path::rectangle(Point::ORIGIN, frame.size()),
-                        Stroke::default(),
+                        Stroke::default()
+                            .with_width(2.0)
+                            .with_color(theme.palette().text),
                     );
                 });
 
-            if let Some(pending) = &self.state.pending {
-                let pending_curve = pending.draw(bounds, cursor);
-
-                vec![content, pending_curve]
+            if let Some(pending) = state {
+                vec![content, pending.draw(renderer, theme, bounds, cursor)]
             } else {
                 vec![content]
             }
@@ -180,10 +169,11 @@ mod bezier {
 
         fn mouse_interaction(
             &self,
+            _state: &Self::State,
             bounds: Rectangle,
-            cursor: Cursor,
+            cursor: mouse::Cursor,
         ) -> mouse::Interaction {
-            if cursor.is_over(&bounds) {
+            if cursor.is_over(bounds) {
                 mouse::Interaction::Crosshair
             } else {
                 mouse::Interaction::default()
@@ -199,7 +189,7 @@ mod bezier {
     }
 
     impl Curve {
-        fn draw_all(curves: &[Curve], frame: &mut Frame) {
+        fn draw_all(curves: &[Curve], frame: &mut Frame, theme: &Theme) {
             let curves = Path::new(|p| {
                 for curve in curves {
                     p.move_to(curve.from);
@@ -207,7 +197,12 @@ mod bezier {
                 }
             });
 
-            frame.stroke(&curves, Stroke::default().with_width(2.0));
+            frame.stroke(
+                &curves,
+                Stroke::default()
+                    .with_width(2.0)
+                    .with_color(theme.palette().text),
+            );
         }
     }
 
@@ -218,14 +213,25 @@ mod bezier {
     }
 
     impl Pending {
-        fn draw(&self, bounds: Rectangle, cursor: Cursor) -> Geometry {
-            let mut frame = Frame::new(bounds.size());
+        fn draw(
+            &self,
+            renderer: &Renderer,
+            theme: &Theme,
+            bounds: Rectangle,
+            cursor: mouse::Cursor,
+        ) -> Geometry {
+            let mut frame = Frame::new(renderer, bounds.size());
 
-            if let Some(cursor_position) = cursor.position_in(&bounds) {
+            if let Some(cursor_position) = cursor.position_in(bounds) {
                 match *self {
                     Pending::One { from } => {
                         let line = Path::line(from, cursor_position);
-                        frame.stroke(&line, Stroke::default().with_width(2.0));
+                        frame.stroke(
+                            &line,
+                            Stroke::default()
+                                .with_width(2.0)
+                                .with_color(theme.palette().text),
+                        );
                     }
                     Pending::Two { from, to } => {
                         let curve = Curve {
@@ -234,7 +240,7 @@ mod bezier {
                             control: cursor_position,
                         };
 
-                        Curve::draw_all(&[curve], &mut frame);
+                        Curve::draw_all(&[curve], &mut frame, theme);
                     }
                 };
             }

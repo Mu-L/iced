@@ -1,115 +1,64 @@
 //! Attach an icon to the window of your application.
-use std::fmt;
+pub use crate::core::window::icon::*;
+
+use crate::core::window::icon;
+
 use std::io;
 
-/// The icon of a window.
-#[derive(Debug, Clone)]
-pub struct Icon(iced_winit::winit::window::Icon);
+#[cfg(feature = "image")]
+use std::path::Path;
 
-impl Icon {
-    /// Creates an icon from 32bpp RGBA data.
-    pub fn from_rgba(
-        rgba: Vec<u8>,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, Error> {
-        let raw =
-            iced_winit::winit::window::Icon::from_rgba(rgba, width, height)?;
+/// Creates an icon from an image file.
+///
+/// This will return an error in case the file is missing at run-time. You may prefer [`from_file_data`] instead.
+#[cfg(feature = "image")]
+pub fn from_file<P: AsRef<Path>>(icon_path: P) -> Result<Icon, Error> {
+    let icon = image::ImageReader::open(icon_path)?.decode()?.to_rgba8();
 
-        Ok(Icon(raw))
-    }
+    Ok(icon::from_rgba(icon.to_vec(), icon.width(), icon.height())?)
 }
 
-/// An error produced when using `Icon::from_rgba` with invalid arguments.
-#[derive(Debug)]
-pub enum Error {
-    /// The provided RGBA data isn't divisble by 4.
-    ///
-    /// Therefore, it cannot be safely interpreted as 32bpp RGBA pixels.
-    InvalidData {
-        /// The length of the provided RGBA data.
-        byte_count: usize,
-    },
+/// Creates an icon from the content of an image file.
+///
+/// This content can be included in your application at compile-time, e.g. using the `include_bytes!` macro.
+/// You can pass an explicit file format. Otherwise, the file format will be guessed at runtime.
+#[cfg(feature = "image")]
+pub fn from_file_data(
+    data: &[u8],
+    explicit_format: Option<image::ImageFormat>,
+) -> Result<Icon, Error> {
+    let mut icon = image::ImageReader::new(std::io::Cursor::new(data));
 
-    /// The number of RGBA pixels does not match the provided dimensions.
-    DimensionsMismatch {
-        /// The provided width.
-        width: u32,
-        /// The provided height.
-        height: u32,
-        /// The amount of pixels of the provided RGBA data.
-        pixel_count: usize,
-    },
+    let icon_with_format = match explicit_format {
+        Some(format) => {
+            icon.set_format(format);
+            icon
+        }
+        None => icon.with_guessed_format()?,
+    };
+
+    let pixels = icon_with_format.decode()?.to_rgba8();
+
+    Ok(icon::from_rgba(
+        pixels.to_vec(),
+        pixels.width(),
+        pixels.height(),
+    )?)
+}
+
+/// An error produced when creating an [`Icon`].
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The [`Icon`] is not valid.
+    #[error("The icon is invalid: {0}")]
+    InvalidError(#[from] icon::Error),
 
     /// The underlying OS failed to create the icon.
-    OsError(io::Error),
-}
+    #[error("The underlying OS failed to create the window icon: {0}")]
+    OsError(#[from] io::Error),
 
-impl From<iced_winit::winit::window::BadIcon> for Error {
-    fn from(error: iced_winit::winit::window::BadIcon) -> Self {
-        use iced_winit::winit::window::BadIcon;
-
-        match error {
-            BadIcon::ByteCountNotDivisibleBy4 { byte_count } => {
-                Error::InvalidData { byte_count }
-            }
-            BadIcon::DimensionsVsPixelCount {
-                width,
-                height,
-                pixel_count,
-                ..
-            } => Error::DimensionsMismatch {
-                width,
-                height,
-                pixel_count,
-            },
-            BadIcon::OsError(os_error) => Error::OsError(os_error),
-        }
-    }
-}
-
-impl From<Icon> for iced_winit::winit::window::Icon {
-    fn from(icon: Icon) -> Self {
-        icon.0
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::InvalidData { byte_count } => {
-                write!(
-                    f,
-                    "The provided RGBA data (with length {:?}) isn't divisble by \
-                4. Therefore, it cannot be safely interpreted as 32bpp RGBA \
-                pixels.",
-                    byte_count,
-                )
-            }
-            Error::DimensionsMismatch {
-                width,
-                height,
-                pixel_count,
-            } => {
-                write!(
-                    f,
-                    "The number of RGBA pixels ({:?}) does not match the provided \
-                dimensions ({:?}x{:?}).",
-                    pixel_count, width, height,
-                )
-            }
-            Error::OsError(e) => write!(
-                f,
-                "The underlying OS failed to create the window \
-                icon: {:?}",
-                e
-            ),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self)
-    }
+    /// The `image` crate reported an error.
+    #[cfg(feature = "image")]
+    #[error("Unable to create icon from a file: {0}")]
+    ImageError(#[from] image::error::ImageError),
 }

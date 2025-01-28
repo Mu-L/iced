@@ -9,9 +9,14 @@ pub enum Layer {
 
 impl Layer {
     pub fn is_empty(&self) -> bool {
+        matches!(self, Layer::Empty)
+    }
+
+    pub fn allocations(&self) -> usize {
         match self {
-            Layer::Empty => true,
-            _ => false,
+            Layer::Empty => 0,
+            Layer::Busy(allocator) => allocator.allocations(),
+            Layer::Full => 1,
         }
     }
 }

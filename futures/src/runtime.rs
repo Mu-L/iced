@@ -1,6 +1,6 @@
 //! Run commands and keep track of subscriptions.
 use crate::subscription;
-use crate::{BoxFuture, Executor, MaybeSend, Subscription};
+use crate::{BoxFuture, BoxStream, Executor, MaybeSend};
 
 use futures::{channel::mpsc, Sink};
 use std::marker::PhantomData;
@@ -8,20 +8,19 @@ use std::marker::PhantomData;
 /// A batteries-included runtime of commands and subscriptions.
 ///
 /// If you have an [`Executor`], a [`Runtime`] can be leveraged to run any
-/// [`Command`] or [`Subscription`] and get notified of the results!
+/// `Command` or [`Subscription`] and get notified of the results!
+///
+/// [`Subscription`]: crate::Subscription
 #[derive(Debug)]
-pub struct Runtime<Hasher, Event, Executor, Sender, Message> {
+pub struct Runtime<Executor, Sender, Message> {
     executor: Executor,
     sender: Sender,
-    subscriptions: subscription::Tracker<Hasher, Event>,
+    subscriptions: subscription::Tracker,
     _message: PhantomData<Message>,
 }
 
-impl<Hasher, Event, Executor, Sender, Message>
-    Runtime<Hasher, Event, Executor, Sender, Message>
+impl<Executor, Sender, Message> Runtime<Executor, Sender, Message>
 where
-    Hasher: std::hash::Hasher + Default,
-    Event: Send + Clone + 'static,
     Executor: self::Executor,
     Sender: Sink<Message, Error = mpsc::SendError>
         + Unpin
@@ -51,10 +50,12 @@ where
         self.executor.enter(f)
     }
 
-    /// Spawns a [`Command`] in the [`Runtime`].
+    /// Spawns a [`Future`] in the [`Runtime`].
     ///
     /// The resulting `Message` will be forwarded to the `Sender` of the
     /// [`Runtime`].
+    ///
+    /// [`Future`]: BoxFuture
     pub fn spawn(&mut self, future: BoxFuture<Message>) {
         use futures::{FutureExt, SinkExt};
 
@@ -62,9 +63,30 @@ where
 
         let future = future.then(|message| async move {
             let _ = sender.send(message).await;
-
-            ()
         });
+
+        self.executor.spawn(future);
+    }
+
+    /// Runs a [`Stream`] in the [`Runtime`] until completion.
+    ///
+    /// The resulting `Message`s will be forwarded to the `Sender` of the
+    /// [`Runtime`].
+    ///
+    /// [`Stream`]: BoxStream
+    pub fn run(&mut self, stream: BoxStream<Message>) {
+        use futures::{FutureExt, StreamExt};
+
+        let sender = self.sender.clone();
+        let future =
+            stream.map(Ok).forward(sender).map(|result| match result {
+                Ok(()) => (),
+                Err(error) => {
+                    log::warn!(
+                        "Stream could not run until completion: {error}"
+                    );
+                }
+            });
 
         self.executor.spawn(future);
     }
@@ -75,9 +97,12 @@ where
     /// [`Tracker::update`] to learn more about this!
     ///
     /// [`Tracker::update`]: subscription::Tracker::update
+    /// [`Subscription`]: crate::Subscription
     pub fn track(
         &mut self,
-        subscription: Subscription<Hasher, Event, Message>,
+        recipes: impl IntoIterator<
+            Item = Box<dyn subscription::Recipe<Output = Message>>,
+        >,
     ) {
         let Runtime {
             executor,
@@ -86,8 +111,9 @@ where
             ..
         } = self;
 
-        let futures = executor
-            .enter(|| subscriptions.update(subscription, sender.clone()));
+        let futures = executor.enter(|| {
+            subscriptions.update(recipes.into_iter(), sender.clone())
+        });
 
         for future in futures {
             executor.spawn(future);
@@ -100,7 +126,7 @@ where
     /// See [`Tracker::broadcast`] to learn more.
     ///
     /// [`Tracker::broadcast`]: subscription::Tracker::broadcast
-    pub fn broadcast(&mut self, event: Event) {
+    pub fn broadcast(&mut self, event: subscription::Event) {
         self.subscriptions.broadcast(event);
     }
 }

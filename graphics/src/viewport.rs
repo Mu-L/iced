@@ -1,4 +1,4 @@
-use crate::{Size, Transformation};
+use crate::core::{Size, Transformation};
 
 /// A viewing region for displaying computer graphics.
 #[derive(Debug, Clone)]

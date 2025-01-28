@@ -2,10 +2,10 @@ use bitflags::bitflags;
 
 bitflags! {
     /// The current state of the keyboard modifiers.
-    #[derive(Default)]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct Modifiers: u32{
         /// The "shift" key.
-        const SHIFT = 0b100 << 0;
+        const SHIFT = 0b100;
         // const LSHIFT = 0b010 << 0;
         // const RSHIFT = 0b001 << 0;
         //
@@ -33,7 +33,7 @@ impl Modifiers {
     /// This is normally the main modifier to be used for hotkeys.
     ///
     /// On macOS, this is equivalent to `Self::LOGO`.
-    /// Ohterwise, this is equivalent to `Self::CTRL`.
+    /// Otherwise, this is equivalent to `Self::CTRL`.
     pub const COMMAND: Self = if cfg!(target_os = "macos") {
         Self::LOGO
     } else {
@@ -41,21 +41,29 @@ impl Modifiers {
     };
 
     /// Returns true if the [`SHIFT`] key is pressed in the [`Modifiers`].
+    ///
+    /// [`SHIFT`]: Self::SHIFT
     pub fn shift(self) -> bool {
         self.contains(Self::SHIFT)
     }
 
     /// Returns true if the [`CTRL`] key is pressed in the [`Modifiers`].
+    ///
+    /// [`CTRL`]: Self::CTRL
     pub fn control(self) -> bool {
         self.contains(Self::CTRL)
     }
 
     /// Returns true if the [`ALT`] key is pressed in the [`Modifiers`].
+    ///
+    /// [`ALT`]: Self::ALT
     pub fn alt(self) -> bool {
         self.contains(Self::ALT)
     }
 
     /// Returns true if the [`LOGO`] key is pressed in the [`Modifiers`].
+    ///
+    /// [`LOGO`]: Self::LOGO
     pub fn logo(self) -> bool {
         self.contains(Self::LOGO)
     }
@@ -75,5 +83,29 @@ impl Modifiers {
         let is_pressed = self.control();
 
         is_pressed
+    }
+
+    /// Returns true if the "jump key" is pressed in the [`Modifiers`].
+    ///
+    /// The "jump key" is the modifier key used to widen text motions. It is the `Alt`
+    /// key in macOS and the `Ctrl` key in other platforms.
+    pub fn jump(self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.alt()
+        } else {
+            self.control()
+        }
+    }
+
+    /// Returns true if the "command key" is pressed on a macOS device.
+    ///
+    /// This is relevant for macOS-specific actions (e.g. `⌘ + ArrowLeft` moves the cursor
+    /// to the beginning of the line).
+    pub fn macos_command(self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.logo()
+        } else {
+            false
+        }
     }
 }

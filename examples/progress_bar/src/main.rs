@@ -1,50 +1,69 @@
-use iced::{slider, Column, Element, ProgressBar, Sandbox, Settings, Slider};
+use iced::widget::{
+    center, center_x, checkbox, column, progress_bar, row, slider,
+    vertical_slider,
+};
+use iced::Element;
 
 pub fn main() -> iced::Result {
-    Progress::run(Settings::default())
+    iced::run("Progress Bar - Iced", Progress::update, Progress::view)
 }
 
 #[derive(Default)]
 struct Progress {
     value: f32,
-    progress_bar_slider: slider::State,
+    is_vertical: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Message {
     SliderChanged(f32),
+    ToggleVertical(bool),
 }
 
-impl Sandbox for Progress {
-    type Message = Message;
-
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn title(&self) -> String {
-        String::from("A simple Progressbar")
-    }
-
+impl Progress {
     fn update(&mut self, message: Message) {
         match message {
             Message::SliderChanged(x) => self.value = x,
+            Message::ToggleVertical(is_vertical) => {
+                self.is_vertical = is_vertical
+            }
         }
     }
 
-    fn view(&mut self) -> Element<Message> {
-        Column::new()
-            .padding(20)
-            .push(ProgressBar::new(0.0..=100.0, self.value))
-            .push(
-                Slider::new(
-                    &mut self.progress_bar_slider,
-                    0.0..=100.0,
-                    self.value,
-                    Message::SliderChanged,
+    fn view(&self) -> Element<Message> {
+        let bar = progress_bar(0.0..=100.0, self.value);
+
+        column![
+            if self.is_vertical {
+                center(
+                    row![
+                        bar.vertical(),
+                        vertical_slider(
+                            0.0..=100.0,
+                            self.value,
+                            Message::SliderChanged
+                        )
+                        .step(0.01)
+                    ]
+                    .spacing(20),
                 )
-                .step(0.01),
-            )
-            .into()
+            } else {
+                center(
+                    column![
+                        bar,
+                        slider(0.0..=100.0, self.value, Message::SliderChanged)
+                            .step(0.01)
+                    ]
+                    .spacing(20),
+                )
+            },
+            center_x(
+                checkbox("Vertical", self.is_vertical)
+                    .on_toggle(Message::ToggleVertical)
+            ),
+        ]
+        .spacing(20)
+        .padding(20)
+        .into()
     }
 }

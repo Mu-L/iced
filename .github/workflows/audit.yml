@@ -1,15 +1,30 @@
 name: Audit
-on: [push]
+on:
+  push: {}
+  pull_request: {}
+  schedule:
+    - cron: '0 0 * * *'
 jobs:
-  dependencies:
+  vulnerabilities:
     runs-on: ubuntu-latest
     steps:
-    - uses: hecrj/setup-rust-action@v1
+    - uses: hecrj/setup-rust-action@v2
     - name: Install cargo-audit
       run: cargo install cargo-audit
     - uses: actions/checkout@master
-    - name: Manually update `nix` crates # See https://github.com/nix-rust/nix/issues/1627
-      run: |
-        cargo update --package nix:0.20.0 --precise 0.20.2
-    - name: Audit dependencies
+    - name: Resolve dependencies
+      run: cargo update
+    - name: Audit vulnerabilities
       run: cargo audit
+
+  # artifacts:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #   - uses: hecrj/setup-rust-action@v2
+  #   - name: Install cargo-outdated
+  #     run: cargo install cargo-outdated
+  #   - uses: actions/checkout@master
+  #   - name: Delete `web-sys` dependency from `integration` example
+  #     run: sed -i '$d' examples/integration/Cargo.toml
+  #   - name: Find outdated dependencies
+  #     run: cargo outdated --workspace --exit-code 1 --ignore raw-window-handle

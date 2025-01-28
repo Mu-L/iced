@@ -1,45 +1,30 @@
-use iced::{
-    alignment, button, executor, Alignment, Application, Button, Checkbox,
-    Column, Command, Container, Element, Length, Settings, Subscription, Text,
-};
-use iced_native::{window, Event};
+use iced::event::{self, Event};
+use iced::widget::{button, center, checkbox, text, Column};
+use iced::window;
+use iced::{Center, Element, Fill, Subscription, Task};
 
 pub fn main() -> iced::Result {
-    Events::run(Settings {
-        exit_on_close_request: false,
-        ..Settings::default()
-    })
+    iced::application("Events - Iced", Events::update, Events::view)
+        .subscription(Events::subscription)
+        .exit_on_close_request(false)
+        .run()
 }
 
 #[derive(Debug, Default)]
 struct Events {
-    last: Vec<iced_native::Event>,
+    last: Vec<Event>,
     enabled: bool,
-    exit: button::State,
-    should_exit: bool,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    EventOccurred(iced_native::Event),
+    EventOccurred(Event),
     Toggled(bool),
     Exit,
 }
 
-impl Application for Events {
-    type Executor = executor::Default;
-    type Message = Message;
-    type Flags = ();
-
-    fn new(_flags: ()) -> (Events, Command<Message>) {
-        (Events::default(), Command::none())
-    }
-
-    fn title(&self) -> String {
-        String::from("Events - Iced")
-    }
-
-    fn update(&mut self, message: Message) -> Command<Message> {
+impl Events {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::EventOccurred(event) if self.enabled => {
                 self.last.push(event);
@@ -47,67 +32,52 @@ impl Application for Events {
                 if self.last.len() > 5 {
                     let _ = self.last.remove(0);
                 }
+
+                Task::none()
             }
             Message::EventOccurred(event) => {
                 if let Event::Window(window::Event::CloseRequested) = event {
-                    self.should_exit = true;
+                    window::get_latest().and_then(window::close)
+                } else {
+                    Task::none()
                 }
             }
             Message::Toggled(enabled) => {
                 self.enabled = enabled;
-            }
-            Message::Exit => {
-                self.should_exit = true;
-            }
-        };
 
-        Command::none()
+                Task::none()
+            }
+            Message::Exit => window::get_latest().and_then(window::close),
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        iced_native::subscription::events().map(Message::EventOccurred)
+        event::listen().map(Message::EventOccurred)
     }
 
-    fn should_exit(&self) -> bool {
-        self.should_exit
-    }
-
-    fn view(&mut self) -> Element<Message> {
-        let events = self.last.iter().fold(
-            Column::new().spacing(10),
-            |column, event| {
-                column.push(Text::new(format!("{:?}", event)).size(40))
-            },
+    fn view(&self) -> Element<Message> {
+        let events = Column::with_children(
+            self.last
+                .iter()
+                .map(|event| text!("{event:?}").size(40))
+                .map(Element::from),
         );
 
-        let toggle = Checkbox::new(
-            self.enabled,
-            "Listen to runtime events",
-            Message::Toggled,
-        );
+        let toggle = checkbox("Listen to runtime events", self.enabled)
+            .on_toggle(Message::Toggled);
 
-        let exit = Button::new(
-            &mut self.exit,
-            Text::new("Exit")
-                .width(Length::Fill)
-                .horizontal_alignment(alignment::Horizontal::Center),
-        )
-        .width(Length::Units(100))
-        .padding(10)
-        .on_press(Message::Exit);
+        let exit = button(text("Exit").width(Fill).align_x(Center))
+            .width(100)
+            .padding(10)
+            .on_press(Message::Exit);
 
         let content = Column::new()
-            .align_items(Alignment::Center)
+            .align_x(Center)
             .spacing(20)
             .push(events)
             .push(toggle)
             .push(exit);
 
-        Container::new(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x()
-            .center_y()
-            .into()
+        center(content).into()
     }
 }

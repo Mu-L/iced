@@ -1,39 +1,33 @@
 //! This example showcases an interactive version of the Game of Life, invented
 //! by John Conway. It leverages a `Canvas` together with other widgets.
 mod preset;
-mod style;
 
 use grid::Grid;
-use iced::button::{self, Button};
-use iced::executor;
-use iced::pick_list::{self, PickList};
-use iced::slider::{self, Slider};
-use iced::time;
-use iced::window;
-use iced::{
-    Alignment, Application, Checkbox, Column, Command, Container, Element,
-    Length, Row, Settings, Subscription, Text,
-};
 use preset::Preset;
-use std::time::{Duration, Instant};
+
+use iced::time::{self, milliseconds};
+use iced::widget::{
+    button, checkbox, column, container, pick_list, row, slider, text,
+};
+use iced::{Center, Element, Fill, Subscription, Task, Theme};
 
 pub fn main() -> iced::Result {
-    env_logger::builder().format_timestamp(None).init();
+    tracing_subscriber::fmt::init();
 
-    GameOfLife::run(Settings {
-        antialiasing: true,
-        window: window::Settings {
-            position: window::Position::Centered,
-            ..window::Settings::default()
-        },
-        ..Settings::default()
-    })
+    iced::application(
+        "Game of Life - Iced",
+        GameOfLife::update,
+        GameOfLife::view,
+    )
+    .subscription(GameOfLife::subscription)
+    .theme(|_| Theme::Dark)
+    .antialiasing(true)
+    .centered()
+    .run()
 }
 
-#[derive(Default)]
 struct GameOfLife {
     grid: Grid,
-    controls: Controls,
     is_playing: bool,
     queued_ticks: usize,
     speed: usize,
@@ -44,7 +38,7 @@ struct GameOfLife {
 #[derive(Debug, Clone)]
 enum Message {
     Grid(grid::Message, usize),
-    Tick(Instant),
+    Tick,
     TogglePlayback,
     ToggleGrid(bool),
     Next,
@@ -53,33 +47,26 @@ enum Message {
     PresetPicked(Preset),
 }
 
-impl Application for GameOfLife {
-    type Message = Message;
-    type Executor = executor::Default;
-    type Flags = ();
-
-    fn new(_flags: ()) -> (Self, Command<Message>) {
-        (
-            Self {
-                speed: 5,
-                ..Self::default()
-            },
-            Command::none(),
-        )
+impl GameOfLife {
+    fn new() -> Self {
+        Self {
+            grid: Grid::default(),
+            is_playing: false,
+            queued_ticks: 0,
+            speed: 5,
+            next_speed: None,
+            version: 0,
+        }
     }
 
-    fn title(&self) -> String {
-        String::from("Game of Life - Iced")
-    }
-
-    fn update(&mut self, message: Message) -> Command<Message> {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Grid(message, version) => {
                 if version == self.version {
                     self.grid.update(message);
                 }
             }
-            Message::Tick(_) | Message::Next => {
+            Message::Tick | Message::Next => {
                 self.queued_ticks = (self.queued_ticks + 1).min(self.speed);
 
                 if let Some(task) = self.grid.tick(self.queued_ticks) {
@@ -91,7 +78,7 @@ impl Application for GameOfLife {
 
                     let version = self.version;
 
-                    return Command::perform(task, move |message| {
+                    return Task::perform(task, move |message| {
                         Message::Grid(message, version)
                     });
                 }
@@ -119,61 +106,106 @@ impl Application for GameOfLife {
             }
         }
 
-        Command::none()
+        Task::none()
     }
 
     fn subscription(&self) -> Subscription<Message> {
         if self.is_playing {
-            time::every(Duration::from_millis(1000 / self.speed as u64))
-                .map(Message::Tick)
+            time::every(milliseconds(1000 / self.speed as u64))
+                .map(|_| Message::Tick)
         } else {
             Subscription::none()
         }
     }
 
-    fn view(&mut self) -> Element<Message> {
+    fn view(&self) -> Element<Message> {
         let version = self.version;
         let selected_speed = self.next_speed.unwrap_or(self.speed);
-        let controls = self.controls.view(
+        let controls = view_controls(
             self.is_playing,
             self.grid.are_lines_visible(),
             selected_speed,
             self.grid.preset(),
         );
 
-        let content = Column::new()
-            .push(
-                self.grid
-                    .view()
-                    .map(move |message| Message::Grid(message, version)),
-            )
-            .push(controls);
+        let content = column![
+            self.grid
+                .view()
+                .map(move |message| Message::Grid(message, version)),
+            controls,
+        ]
+        .height(Fill);
 
-        Container::new(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(style::Container)
-            .into()
+        container(content).width(Fill).height(Fill).into()
     }
+}
+
+impl Default for GameOfLife {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn view_controls<'a>(
+    is_playing: bool,
+    is_grid_enabled: bool,
+    speed: usize,
+    preset: Preset,
+) -> Element<'a, Message> {
+    let playback_controls = row![
+        button(if is_playing { "Pause" } else { "Play" })
+            .on_press(Message::TogglePlayback),
+        button("Next")
+            .on_press(Message::Next)
+            .style(button::secondary),
+    ]
+    .spacing(10);
+
+    let speed_controls = row![
+        slider(1.0..=1000.0, speed as f32, Message::SpeedChanged),
+        text!("x{speed}").size(16),
+    ]
+    .align_y(Center)
+    .spacing(10);
+
+    row![
+        playback_controls,
+        speed_controls,
+        checkbox("Grid", is_grid_enabled).on_toggle(Message::ToggleGrid),
+        row![
+            pick_list(preset::ALL, Some(preset), Message::PresetPicked),
+            button("Clear")
+                .on_press(Message::Clear)
+                .style(button::danger)
+        ]
+        .spacing(10)
+    ]
+    .padding(10)
+    .spacing(20)
+    .align_y(Center)
+    .into()
 }
 
 mod grid {
     use crate::Preset;
+    use iced::alignment;
+    use iced::mouse;
+    use iced::time::{Duration, Instant};
+    use iced::touch;
+    use iced::widget::canvas;
+    use iced::widget::canvas::{
+        Cache, Canvas, Event, Frame, Geometry, Path, Text,
+    };
     use iced::{
-        alignment,
-        canvas::event::{self, Event},
-        canvas::{self, Cache, Canvas, Cursor, Frame, Geometry, Path, Text},
-        mouse, Color, Element, Length, Point, Rectangle, Size, Vector,
+        Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme, Vector,
     };
     use rustc_hash::{FxHashMap, FxHashSet};
     use std::future::Future;
     use std::ops::RangeInclusive;
-    use std::time::{Duration, Instant};
 
     pub struct Grid {
         state: State,
         preset: Preset,
-        interaction: Interaction,
         life_cache: Cache,
         grid_cache: Cache,
         translation: Vector,
@@ -187,6 +219,8 @@ mod grid {
     pub enum Message {
         Populate(Cell),
         Unpopulate(Cell),
+        Translated(Vector),
+        Scaled(f32, Option<Vector>),
         Ticked {
             result: Result<Life, TickError>,
             tick_duration: Duration,
@@ -218,7 +252,6 @@ mod grid {
                         .collect(),
                 ),
                 preset,
-                interaction: Interaction::None,
                 life_cache: Cache::default(),
                 grid_cache: Cache::default(),
                 translation: Vector::default(),
@@ -263,6 +296,22 @@ mod grid {
 
                     self.preset = Preset::Custom;
                 }
+                Message::Translated(translation) => {
+                    self.translation = translation;
+
+                    self.life_cache.clear();
+                    self.grid_cache.clear();
+                }
+                Message::Scaled(scaling, translation) => {
+                    self.scaling = scaling;
+
+                    if let Some(translation) = translation {
+                        self.translation = translation;
+                    }
+
+                    self.life_cache.clear();
+                    self.grid_cache.clear();
+                }
                 Message::Ticked {
                     result: Ok(life),
                     tick_duration,
@@ -280,11 +329,8 @@ mod grid {
             }
         }
 
-        pub fn view<'a>(&'a mut self) -> Element<'a, Message> {
-            Canvas::new(self)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
+        pub fn view(&self) -> Element<Message> {
+            Canvas::new(self).width(Fill).height(Fill).into()
         }
 
         pub fn clear(&mut self) {
@@ -328,23 +374,21 @@ mod grid {
         }
     }
 
-    impl<'a> canvas::Program<Message> for Grid {
+    impl canvas::Program<Message> for Grid {
+        type State = Interaction;
+
         fn update(
-            &mut self,
+            &self,
+            interaction: &mut Interaction,
             event: Event,
             bounds: Rectangle,
-            cursor: Cursor,
-        ) -> (event::Status, Option<Message>) {
+            cursor: mouse::Cursor,
+        ) -> Option<canvas::Action<Message>> {
             if let Event::Mouse(mouse::Event::ButtonReleased(_)) = event {
-                self.interaction = Interaction::None;
+                *interaction = Interaction::None;
             }
 
-            let cursor_position =
-                if let Some(position) = cursor.position_in(&bounds) {
-                    position
-                } else {
-                    return (event::Status::Ignored, None);
-                };
+            let cursor_position = cursor.position_in(bounds)?;
 
             let cell = Cell::at(self.project(cursor_position, bounds.size()));
             let is_populated = self.state.contains(&cell);
@@ -356,11 +400,29 @@ mod grid {
             };
 
             match event {
+                Event::Touch(touch::Event::FingerMoved { .. }) => {
+                    let message = {
+                        *interaction = if is_populated {
+                            Interaction::Erasing
+                        } else {
+                            Interaction::Drawing
+                        };
+
+                        populate.or(unpopulate)
+                    };
+
+                    Some(
+                        message
+                            .map(canvas::Action::publish)
+                            .unwrap_or(canvas::Action::request_redraw())
+                            .and_capture(),
+                    )
+                }
                 Event::Mouse(mouse_event) => match mouse_event {
                     mouse::Event::ButtonPressed(button) => {
                         let message = match button {
                             mouse::Button::Left => {
-                                self.interaction = if is_populated {
+                                *interaction = if is_populated {
                                     Interaction::Erasing
                                 } else {
                                     Interaction::Drawing
@@ -369,7 +431,7 @@ mod grid {
                                 populate.or(unpopulate)
                             }
                             mouse::Button::Right => {
-                                self.interaction = Interaction::Panning {
+                                *interaction = Interaction::Panning {
                                     translation: self.translation,
                                     start: cursor_position,
                                 };
@@ -379,31 +441,35 @@ mod grid {
                             _ => None,
                         };
 
-                        (event::Status::Captured, message)
+                        Some(
+                            message
+                                .map(canvas::Action::publish)
+                                .unwrap_or(canvas::Action::request_redraw())
+                                .and_capture(),
+                        )
                     }
                     mouse::Event::CursorMoved { .. } => {
-                        let message = match self.interaction {
+                        let message = match *interaction {
                             Interaction::Drawing => populate,
                             Interaction::Erasing => unpopulate,
                             Interaction::Panning { translation, start } => {
-                                self.translation = translation
-                                    + (cursor_position - start)
-                                        * (1.0 / self.scaling);
-
-                                self.life_cache.clear();
-                                self.grid_cache.clear();
-
-                                None
+                                Some(Message::Translated(
+                                    translation
+                                        + (cursor_position - start)
+                                            * (1.0 / self.scaling),
+                                ))
                             }
-                            _ => None,
+                            Interaction::None => None,
                         };
 
-                        let event_status = match self.interaction {
-                            Interaction::None => event::Status::Ignored,
-                            _ => event::Status::Captured,
-                        };
+                        let action = message
+                            .map(canvas::Action::publish)
+                            .unwrap_or(canvas::Action::request_redraw());
 
-                        (event_status, message)
+                        Some(match interaction {
+                            Interaction::None => action,
+                            _ => action.and_capture(),
+                        })
                     }
                     mouse::Event::WheelScrolled { delta } => match delta {
                         mouse::ScrollDelta::Lines { y, .. }
@@ -413,42 +479,62 @@ mod grid {
                             {
                                 let old_scaling = self.scaling;
 
-                                self.scaling = (self.scaling
-                                    * (1.0 + y / 30.0))
-                                    .max(Self::MIN_SCALING)
-                                    .min(Self::MAX_SCALING);
+                                let scaling = (self.scaling * (1.0 + y / 30.0))
+                                    .clamp(
+                                        Self::MIN_SCALING,
+                                        Self::MAX_SCALING,
+                                    );
 
-                                if let Some(cursor_to_center) =
-                                    cursor.position_from(bounds.center())
-                                {
-                                    let factor = self.scaling - old_scaling;
+                                let translation =
+                                    if let Some(cursor_to_center) =
+                                        cursor.position_from(bounds.center())
+                                    {
+                                        let factor = scaling - old_scaling;
 
-                                    self.translation = self.translation
-                                        - Vector::new(
-                                            cursor_to_center.x * factor
-                                                / (old_scaling * old_scaling),
-                                            cursor_to_center.y * factor
-                                                / (old_scaling * old_scaling),
-                                        );
-                                }
+                                        Some(
+                                            self.translation
+                                                - Vector::new(
+                                                    cursor_to_center.x * factor
+                                                        / (old_scaling
+                                                            * old_scaling),
+                                                    cursor_to_center.y * factor
+                                                        / (old_scaling
+                                                            * old_scaling),
+                                                ),
+                                        )
+                                    } else {
+                                        None
+                                    };
 
-                                self.life_cache.clear();
-                                self.grid_cache.clear();
+                                Some(
+                                    canvas::Action::publish(Message::Scaled(
+                                        scaling,
+                                        translation,
+                                    ))
+                                    .and_capture(),
+                                )
+                            } else {
+                                Some(canvas::Action::capture())
                             }
-
-                            (event::Status::Captured, None)
                         }
                     },
-                    _ => (event::Status::Ignored, None),
+                    _ => None,
                 },
-                _ => (event::Status::Ignored, None),
+                _ => None,
             }
         }
 
-        fn draw(&self, bounds: Rectangle, cursor: Cursor) -> Vec<Geometry> {
+        fn draw(
+            &self,
+            _interaction: &Interaction,
+            renderer: &Renderer,
+            _theme: &Theme,
+            bounds: Rectangle,
+            cursor: mouse::Cursor,
+        ) -> Vec<Geometry> {
             let center = Vector::new(bounds.width / 2.0, bounds.height / 2.0);
 
-            let life = self.life_cache.draw(bounds.size(), |frame| {
+            let life = self.life_cache.draw(renderer, bounds.size(), |frame| {
                 let background = Path::rectangle(Point::ORIGIN, frame.size());
                 frame.fill(&background, Color::from_rgb8(0x40, 0x44, 0x4B));
 
@@ -456,7 +542,7 @@ mod grid {
                     frame.translate(center);
                     frame.scale(self.scaling);
                     frame.translate(self.translation);
-                    frame.scale(Cell::SIZE as f32);
+                    frame.scale(Cell::SIZE);
 
                     let region = self.visible_region(frame.size());
 
@@ -471,19 +557,18 @@ mod grid {
             });
 
             let overlay = {
-                let mut frame = Frame::new(bounds.size());
+                let mut frame = Frame::new(renderer, bounds.size());
 
-                let hovered_cell =
-                    cursor.position_in(&bounds).map(|position| {
-                        Cell::at(self.project(position, frame.size()))
-                    });
+                let hovered_cell = cursor.position_in(bounds).map(|position| {
+                    Cell::at(self.project(position, frame.size()))
+                });
 
                 if let Some(cell) = hovered_cell {
                     frame.with_save(|frame| {
                         frame.translate(center);
                         frame.scale(self.scaling);
                         frame.translate(self.translation);
-                        frame.scale(Cell::SIZE as f32);
+                        frame.scale(Cell::SIZE);
 
                         frame.fill_rectangle(
                             Point::new(cell.j as f32, cell.i as f32),
@@ -498,7 +583,7 @@ mod grid {
 
                 let text = Text {
                     color: Color::WHITE,
-                    size: 14.0,
+                    size: 14.0.into(),
                     position: Point::new(frame.width(), frame.height()),
                     horizontal_alignment: alignment::Horizontal::Right,
                     vertical_alignment: alignment::Vertical::Bottom,
@@ -517,8 +602,7 @@ mod grid {
 
                 frame.fill_text(Text {
                     content: format!(
-                        "{} cell{} @ {:?} ({})",
-                        cell_count,
+                        "{cell_count} cell{} @ {:?} ({})",
                         if cell_count == 1 { "" } else { "s" },
                         self.last_tick_duration,
                         self.last_queued_ticks
@@ -529,59 +613,62 @@ mod grid {
                 frame.into_geometry()
             };
 
-            if self.scaling < 0.2 || !self.show_lines {
-                vec![life, overlay]
-            } else {
-                let grid = self.grid_cache.draw(bounds.size(), |frame| {
-                    frame.translate(center);
-                    frame.scale(self.scaling);
-                    frame.translate(self.translation);
-                    frame.scale(Cell::SIZE as f32);
+            if self.scaling >= 0.2 && self.show_lines {
+                let grid =
+                    self.grid_cache.draw(renderer, bounds.size(), |frame| {
+                        frame.translate(center);
+                        frame.scale(self.scaling);
+                        frame.translate(self.translation);
+                        frame.scale(Cell::SIZE);
 
-                    let region = self.visible_region(frame.size());
-                    let rows = region.rows();
-                    let columns = region.columns();
-                    let (total_rows, total_columns) =
-                        (rows.clone().count(), columns.clone().count());
-                    let width = 2.0 / Cell::SIZE as f32;
-                    let color = Color::from_rgb8(70, 74, 83);
+                        let region = self.visible_region(frame.size());
+                        let rows = region.rows();
+                        let columns = region.columns();
+                        let (total_rows, total_columns) =
+                            (rows.clone().count(), columns.clone().count());
+                        let width = 2.0 / Cell::SIZE as f32;
+                        let color = Color::from_rgb8(70, 74, 83);
 
-                    frame.translate(Vector::new(-width / 2.0, -width / 2.0));
+                        frame
+                            .translate(Vector::new(-width / 2.0, -width / 2.0));
 
-                    for row in region.rows() {
-                        frame.fill_rectangle(
-                            Point::new(*columns.start() as f32, row as f32),
-                            Size::new(total_columns as f32, width),
-                            color,
-                        );
-                    }
+                        for row in region.rows() {
+                            frame.fill_rectangle(
+                                Point::new(*columns.start() as f32, row as f32),
+                                Size::new(total_columns as f32, width),
+                                color,
+                            );
+                        }
 
-                    for column in region.columns() {
-                        frame.fill_rectangle(
-                            Point::new(column as f32, *rows.start() as f32),
-                            Size::new(width, total_rows as f32),
-                            color,
-                        );
-                    }
-                });
+                        for column in region.columns() {
+                            frame.fill_rectangle(
+                                Point::new(column as f32, *rows.start() as f32),
+                                Size::new(width, total_rows as f32),
+                                color,
+                            );
+                        }
+                    });
 
                 vec![life, grid, overlay]
+            } else {
+                vec![life, overlay]
             }
         }
 
         fn mouse_interaction(
             &self,
+            interaction: &Interaction,
             bounds: Rectangle,
-            cursor: Cursor,
+            cursor: mouse::Cursor,
         ) -> mouse::Interaction {
-            match self.interaction {
+            match interaction {
                 Interaction::Drawing => mouse::Interaction::Crosshair,
                 Interaction::Erasing => mouse::Interaction::Crosshair,
                 Interaction::Panning { .. } => mouse::Interaction::Grabbing,
-                Interaction::None if cursor.is_over(&bounds) => {
+                Interaction::None if cursor.is_over(bounds) => {
                     mouse::Interaction::Crosshair
                 }
-                _ => mouse::Interaction::default(),
+                Interaction::None => mouse::Interaction::default(),
             }
         }
     }
@@ -697,7 +784,7 @@ mod grid {
                 }
             }
 
-            for (cell, amount) in adjacent_life.iter() {
+            for (cell, amount) in &adjacent_life {
                 match amount {
                     2 => {}
                     3 => {
@@ -738,7 +825,7 @@ mod grid {
     }
 
     impl Cell {
-        const SIZE: usize = 20;
+        const SIZE: u16 = 20;
 
         fn at(position: Point) -> Cell {
             let i = (position.y / Cell::SIZE as f32).ceil() as isize;
@@ -803,90 +890,16 @@ mod grid {
         }
     }
 
-    enum Interaction {
+    pub enum Interaction {
         None,
         Drawing,
         Erasing,
         Panning { translation: Vector, start: Point },
     }
-}
 
-#[derive(Default)]
-struct Controls {
-    toggle_button: button::State,
-    next_button: button::State,
-    clear_button: button::State,
-    speed_slider: slider::State,
-    preset_list: pick_list::State<Preset>,
-}
-
-impl Controls {
-    fn view<'a>(
-        &'a mut self,
-        is_playing: bool,
-        is_grid_enabled: bool,
-        speed: usize,
-        preset: Preset,
-    ) -> Element<'a, Message> {
-        let playback_controls = Row::new()
-            .spacing(10)
-            .push(
-                Button::new(
-                    &mut self.toggle_button,
-                    Text::new(if is_playing { "Pause" } else { "Play" }),
-                )
-                .on_press(Message::TogglePlayback)
-                .style(style::Button),
-            )
-            .push(
-                Button::new(&mut self.next_button, Text::new("Next"))
-                    .on_press(Message::Next)
-                    .style(style::Button),
-            );
-
-        let speed_controls = Row::new()
-            .width(Length::Fill)
-            .align_items(Alignment::Center)
-            .spacing(10)
-            .push(
-                Slider::new(
-                    &mut self.speed_slider,
-                    1.0..=1000.0,
-                    speed as f32,
-                    Message::SpeedChanged,
-                )
-                .style(style::Slider),
-            )
-            .push(Text::new(format!("x{}", speed)).size(16));
-
-        Row::new()
-            .padding(10)
-            .spacing(20)
-            .align_items(Alignment::Center)
-            .push(playback_controls)
-            .push(speed_controls)
-            .push(
-                Checkbox::new(is_grid_enabled, "Grid", Message::ToggleGrid)
-                    .size(16)
-                    .spacing(5)
-                    .text_size(16),
-            )
-            .push(
-                PickList::new(
-                    &mut self.preset_list,
-                    preset::ALL,
-                    Some(preset),
-                    Message::PresetPicked,
-                )
-                .padding(8)
-                .text_size(16)
-                .style(style::PickList),
-            )
-            .push(
-                Button::new(&mut self.clear_button, Text::new("Clear"))
-                    .on_press(Message::Clear)
-                    .style(style::Clear),
-            )
-            .into()
+    impl Default for Interaction {
+        fn default() -> Self {
+            Self::None
+        }
     }
 }
